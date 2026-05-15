@@ -1,0 +1,89 @@
+# ============================================================
+# SECRETS — never commit these
+# ============================================================
+.env
+.env.local
+.env.*
+*.env
+API_Keys.txt
+API_keys.txt
+api_keys.txt
+*.pem
+*.key
+credentials.json
+secrets.json
+
+# ============================================================
+# Pipeline outputs (regenerated on every run; large)
+# ============================================================
+output/
+logs/
+data/raw/
+data/processed/
+data/llm_cache/
+reports/
+
+# ============================================================
+# One-off / scratch artefacts
+# ============================================================
+Dry_Run/
+*_v2.pdf
+*_v3.pdf
+*_v4.pdf
+*_v5.pdf
+*_v6.pdf
+*_v7.pdf
+*_v8.pdf
+*_v9.pdf
+*_v10.pdf
+*.tmp
+*.bak
+
+# ============================================================
+# Python
+# ============================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtualenvs
+.venv/
+venv/
+env/
+ENV/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# ============================================================
+# Editors / IDE
+# ============================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
