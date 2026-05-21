@@ -31,6 +31,7 @@ ACCENT_TEAL = colors.HexColor("#2CA6A4")
 HIGHLIGHT_GREY = colors.HexColor("#F5F7FA")
 BRAND_RED = colors.HexColor("#C8102E")
 BRAND_YELLOW = colors.HexColor("#F7C600")
+
 NEWSLETTER_INDEX_ITEMS = [
     "Industry Pulse",
     "Regulatory Watch",
@@ -38,9 +39,7 @@ NEWSLETTER_INDEX_ITEMS = [
     "Key Takeaways",
 ]
 
-# Sub-index entries shown under their parent items on the Index page. Only Competitor
-# Intelligence has sub-items because it has four named sub-sections; the other sections
-# are self-contained and don't need a sub-index.
+# Sub-index entries shown under their parent items on the Index page.
 NEWSLETTER_INDEX_SUBITEMS: Dict[str, List[str]] = {
     "Competitor Intelligence": [
         "Growth & Strategy",
@@ -50,10 +49,7 @@ NEWSLETTER_INDEX_SUBITEMS: Dict[str, List[str]] = {
     ],
 }
 
-# Consolidated colour palette. Every section AND every Competitor Intelligence
-# sub-section gets its OWN unique colour. The same hex is used everywhere that
-# section appears: in the Index card's left strip AND on every body callout's
-# left accent, so the reader can trace a section by colour through the document.
+# Consolidated colour palette.
 INDEX_SECTION_COLORS: Dict[str, str] = {
     "Industry Pulse":          "#1B7A3A",   # forest green
     "Regulatory Watch":        "#C8102E",   # brand red
@@ -61,15 +57,25 @@ INDEX_SECTION_COLORS: Dict[str, str] = {
     "Key Takeaways":           "#D97706",   # amber
 }
 
-# The four sub-sections of Competitor Intelligence each get a colour distinct from
-# every other colour in the digest. Used on the sub-card in the Index AND on the
-# heading + left-edge accent of every callout in that sub-section.
 CI_SUBSECTION_COLORS: Dict[str, str] = {
     "Growth & Strategy":   "#0E7C7B",   # teal
     "Funding & Capital":   "#7E22CE",   # purple
-    "Risk & Governance":   "#9F1239",   # burgundy (distinct from brand red used by Reg Watch)
+    "Risk & Governance":   "#9F1239",   # burgundy
     "Operational Signals": "#475569",   # slate
 }
+
+# FIX 4: Per-section soft background tones for _insight_box
+SECTION_BG_COLORS: Dict[str, str] = {
+    "Industry Pulse":    "#F0F7F0",   # pale green
+    "Regulatory Watch":  "#FEF3F2",   # warm rose
+    "Key Takeaways":     "#FFFBEB",   # warm amber tint
+    # CI sub-sections
+    "Growth & Strategy":   "#F0FAFA",  # pale teal
+    "Funding & Capital":   "#FAF5FF",  # pale purple
+    "Risk & Governance":   "#FFF1F3",  # pale burgundy
+    "Operational Signals": "#F8FAFC",  # pale slate
+}
+DEFAULT_BG = "#F5F7FA"
 
 
 def _build_styles():
@@ -168,10 +174,6 @@ def _build_styles():
             textColor=colors.HexColor("#1F3C88"),
             spaceAfter=6,
         ),
-        # ---- Index page styles (used inside the numbered-card Table on the Index page) ----
-        # spaceBefore/leftIndent intentionally zero so the Table cell padding is the
-        # single source of truth for vertical/horizontal positioning. Otherwise the
-        # heading drifts down relative to the badge number in the adjacent cell.
         "IndexPrimaryStyle": ParagraphStyle(
             "IndexPrimaryStyle",
             parent=base["Normal"],
@@ -195,6 +197,19 @@ def _build_styles():
             bulletIndent=6,
             spaceAfter=2,
             textColor=colors.HexColor("#2F3A4A"),
+        ),
+        # FIX 3: smaller style for competitor names listed under sub-cards in the index
+        "IndexCompetitorStyle": ParagraphStyle(
+            "IndexCompetitorStyle",
+            parent=base["Normal"],
+            fontName="Helvetica",
+            fontSize=8,
+            leading=10,
+            alignment=TA_LEFT,
+            leftIndent=0,
+            spaceBefore=0,
+            spaceAfter=1,
+            textColor=colors.HexColor("#374151"),
         ),
     }
 
@@ -329,6 +344,14 @@ def _separator() -> HRFlowable:
     return HRFlowable(width="100%", thickness=0.8, color=colors.HexColor("#C9D8EA"), spaceBefore=8, spaceAfter=12)
 
 
+# FIX 1: subtle thin divider between consecutive insight boxes
+def _box_divider() -> HRFlowable:
+    """Very light hairline divider between consecutive callout boxes.
+    Provides visual separation without adding excessive whitespace."""
+    return HRFlowable(width="100%", thickness=0.4, color=colors.HexColor("#E2E8F0"), spaceBefore=4, spaceAfter=4)
+
+
+# FIX: single, correct _header_footer — previous version had stray Table code injected
 def _header_footer(canvas, doc) -> None:  # type: ignore[no-untyped-def]
     canvas.saveState()
     width, height = A4
@@ -338,80 +361,6 @@ def _header_footer(canvas, doc) -> None:  # type: ignore[no-untyped-def]
     canvas.drawRightString(width - doc.rightMargin, 20, f"Page {canvas.getPageNumber()}")
     canvas.restoreState()
 
-    table = Table(rows, colWidths=[0.9 * inch, 0.95 * inch, 0.8 * inch, 2.0 * inch, 2.35 * inch], hAlign="LEFT")
-    table.setStyle(
-        TableStyle(
-            [
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E9EDF5")),
-                ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#111111")),
-                ("ALIGN", (0, 0), (-1, -1), "LEFT"),
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#C7CDD9")),
-                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFD")]),
-                ("LEFTPADDING", (0, 0), (-1, -1), 6),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-                ("TOPPADDING", (0, 0), (-1, -1), 5),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-            ]
-        )
-    )
-    return table
-
-
-def _bullets(lines: List[str], styles: dict, empty_text: str = "Not found in source reviewed") -> List[Paragraph]:
-    items = [_clean_markdown_line_noise(str(line)) for line in lines if str(line).strip()]
-    items = [item for item in items if item]
-    if not items:
-        items = [empty_text]
-    return [Paragraph(_sanitize(item), styles["BulletStyle"], bulletText="•") for item in items]
-
-
-def _separator() -> HRFlowable:
-    return HRFlowable(width="100%", thickness=0.8, color=colors.HexColor("#D2D7E2"), spaceBefore=6, spaceAfter=10)
-
-
-def _header_footer(canvas, doc) -> None:  # type: ignore[no-untyped-def]
-    canvas.saveState()
-    width, height = A4
-    canvas.setFont("Helvetica", 9)
-    canvas.setFillColor(colors.HexColor("#666666"))
-    canvas.drawString(doc.leftMargin, height - 28, "Weekly Intelligence Report")
-    canvas.drawRightString(width - doc.rightMargin, 20, f"Page {canvas.getPageNumber()}")
-    canvas.restoreState()
-
-
-def _company_display_name(raw_company: str, idx: int) -> str:
-    clean = (raw_company or "").strip()
-    clean = re.sub(r"^c\d{2}\s*-\s*", "", clean, flags=re.IGNORECASE)
-    clean = re.sub(r"^#+\s*", "", clean).strip()
-    return f"C{idx:02d} - {clean}" if clean else f"C{idx:02d}"
-
-
-def _reference_paragraphs(section, styles: dict) -> List[Paragraph]:
-    if not section.references:
-        return [Paragraph("Not found in source reviewed", styles["BodyStyle"])]
-
-    items = []
-    for ref in section.references:
-        title = _sanitize(ref.title or "Source")
-        source = _sanitize(ref.source or "Unknown source")
-        date = _sanitize(ref.date or "Unknown date")
-        canonical_url = _sanitize(getattr(ref, "canonical_url", "") or ref.url or "")
-        original_url = _sanitize(getattr(ref, "original_url", "") or "")
-        if canonical_url:
-            line = f"• <b>{title}</b> | {source} | {date} | <link href='{canonical_url}' color='blue'>{canonical_url}</link>"
-            if original_url and original_url != canonical_url:
-                line += f" | original: {original_url}"
-        elif original_url:
-            line = (
-                f"• <b>{title}</b> | {source} | {date} | "
-                f"<link href='{original_url}' color='blue'>{original_url}</link> | aggregator"
-            )
-        else:
-            line = f"• <b>{title}</b> | {source} | {date}"
-        items.append(Paragraph(line, styles["BodyStyle"]))
-    return items
 
 def _company_display_name(raw_company: str, idx: int) -> str:
     clean = (raw_company or "").strip()
@@ -705,38 +654,110 @@ def render_agentic_digest_pdf(
     doc.build(story, onFirstPage=_header_footer, onLaterPages=_header_footer)
 
 
-def _insight_box(title: str, body: str, styles: dict, accent_hex: Optional[str] = None) -> Table:
-    """Tinted callout. Title is always shown bold; body row is rendered only when non-empty.
-
-    `accent_hex` (e.g. '#2D8659' for Growth) adds a coloured LEFT-edge bar so the four
-    Competitor Intelligence sub-sections are visually distinguishable. When None, the
-    callout uses the default light-blue border on all four sides.
+# FIX 4: accent_hex drives left-edge colour; section_key drives soft background tone
+def _insight_box(
+    title: str,
+    body: str,
+    styles: dict,
+    accent_hex: Optional[str] = None,
+    section_key: Optional[str] = None,
+    variant: str = "normal",
+) -> Table:
+    """Tinted callout box with a coloured left-edge accent bar and section-specific
+    soft background.  `section_key` is the section or CI sub-section name used to
+    look up the per-section background colour from SECTION_BG_COLORS.
     """
     rows = [[Paragraph(f"<b>{_sanitize(title)}</b>", styles["BodyStyle"])]]
     body_clean = (body or "").strip()
     if body_clean:
         rows.append([Paragraph(_sanitize(body_clean), styles["BodyStyle"])])
-    table = Table(rows, colWidths=[6.5 * inch], hAlign="LEFT")
+
+    bg_hex = SECTION_BG_COLORS.get(section_key or "", DEFAULT_BG) if section_key else DEFAULT_BG
+    bg_color = colors.HexColor(bg_hex)
+    if variant == "summary":
+        box_width = 6.5 * inch
+        border_width = 1.4
+        accent_width = 5
+        left_padding = 14
+        top_padding = 10
+        bottom_padding = 10
+    else:
+        box_width = 6.5 * inch
+        border_width = 0.7
+        accent_width = 4
+        left_padding = 10
+        top_padding = 6
+        bottom_padding = 6
+
+    # table = Table(rows, colWidths=[6.5 * inch], hAlign="LEFT")
+    # table_style = [
+    #     ("BACKGROUND", (0, 0), (-1, -1), bg_color),
+    #     ("BOX", (0, 0), (-1, -1), 0.7, colors.HexColor("#C9D8EA")),
+    #     ("LEFTPADDING", (0, 0), (-1, -1), 10 if accent_hex else 8),
+    #     ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+    #     ("TOPPADDING", (0, 0), (-1, -1), 6),
+    #     ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+    # ]
+    table = Table(rows, colWidths=[box_width], hAlign="LEFT")
+
     table_style = [
-        ("BACKGROUND", (0, 0), (-1, -1), HIGHLIGHT_GREY),
-        ("BOX", (0, 0), (-1, -1), 0.7, colors.HexColor("#C9D8EA")),
-        ("LEFTPADDING", (0, 0), (-1, -1), 10 if accent_hex else 8),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
-        ("TOPPADDING", (0, 0), (-1, -1), 6),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-    ]
+        ("BACKGROUND", (0, 0), (-1, -1), bg_color),
+        ("BOX", (0, 0), (-1, -1), border_width, colors.HexColor("#C9D8EA")),
+        ("LEFTPADDING", (0, 0), (-1, -1), left_padding if accent_hex else 8),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+        ("TOPPADDING", (0, 0), (-1, -1), top_padding),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), bottom_padding),
+]
     if accent_hex:
-        # Thick coloured bar on the left edge — section colour-coding.
-        table_style.append(("LINEBEFORE", (0, 0), (0, -1), 4, colors.HexColor(accent_hex)))
+        table_style.append(("LINEBEFORE", (0, 0), (0, -1), accent_width, colors.HexColor(accent_hex)))
     table.setStyle(TableStyle(table_style))
     return table
 
+def _summary_hero_box(body, styles, accent_hex):
+    header = Paragraph(
+        f"<font color='{accent_hex}'><b>EXECUTIVE SUMMARY</b></font>",
+        ParagraphStyle(
+            "SummaryHeader",
+            parent=styles["BodyStyle"],
+            fontName="Helvetica-Bold",
+            fontSize=11,
+            leading=13,
+            alignment=TA_LEFT,
+        )
+    )
 
-# ----- Industry Pulse helpers: match each highlight to a deeper-detail sentence ---
+    body_para = Paragraph(
+        _sanitize(body),
+        ParagraphStyle(
+            "SummaryBody",
+            parent=styles["BodyStyle"],
+            fontSize=10.5,
+            leading=15,
+        )
+    )
 
+    table = Table(
+        [[header], [body_para]],
+        colWidths=[6.5 * inch],
+        hAlign="LEFT"
+    )
+
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1),
+         SECTION_BG_COLORS.get("Industry Pulse", DEFAULT_BG)),
+        ("LINEBEFORE", (0, 0), (0, -1), 5, colors.HexColor(accent_hex)),
+        ("BOX", (0, 0), (-1, -1), 1.1, colors.HexColor("#BFCEDB")),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.6, colors.HexColor("#D6E0EA")),
+        ("LEFTPADDING", (0, 0), (-1, -1), 16),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 14),
+        ("TOPPADDING", (0, 0), (-1, -1), 10),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+    ]))
+
+    return table
+# ----- Industry Pulse helpers -----
 
 def _split_sentences(text: str) -> List[str]:
-    """Split a paragraph into sentences. Simple regex; good enough for short summaries."""
     if not text:
         return []
     parts = re.split(r"(?<=[.!?])\s+", text.strip())
@@ -744,10 +765,6 @@ def _split_sentences(text: str) -> List[str]:
 
 
 def _best_sentence_for_highlight(highlight: str, sentences: List[str], used: set) -> str:
-    """Return the unused sentence with the most word overlap with `highlight`.
-    Used to surface a 'deeper explanation' under each Industry Pulse callout without
-    additional LLM calls — by reusing sentences already present in summary_paragraph.
-    """
     if not highlight or not sentences:
         return ""
     h_words = {w for w in re.findall(r"\w{4,}", highlight.lower())}
@@ -925,14 +942,7 @@ def _auto_generate_takeaways(newsletter: Dict[str, Any]) -> List[str]:
 
 
 def _short_heading(text: str, max_words: int = 10) -> str:
-    """Compress a full headline into a punchy 6-10 word callout title.
-
-    Strategy: drop trailing punctuation, prefer the clause before the first comma /
-    colon when it lands within a reasonable length, then enforce a hard word cap.
-    Example:
-        'RBI imposes monetary penalties on Hinduja Housing Finance Ltd, Yes Bank Ltd for ...'
-        -> 'RBI imposes monetary penalties on Hinduja Housing Finance Ltd'
-    """
+    """Compress a full headline into a punchy 6-10 word callout title."""
     if not text:
         return ""
     t = text.strip().rstrip(".:!?")
@@ -948,10 +958,7 @@ def _short_heading(text: str, max_words: int = 10) -> str:
 
 
 def _is_near_duplicate(a: str, b: str, threshold: float = 0.78) -> bool:
-    """True when two strings are essentially the same — used to detect when the
-    composer LLM produces a 'narrative' that is just a paraphrase of 'event'.
-    Uses a simple normalized-difflib ratio; no extra dependency.
-    """
+    """True when two strings are essentially the same."""
     if not a or not b:
         return False
     import difflib
@@ -967,7 +974,6 @@ def _polish_event_text(event: str) -> str:
     if not event:
         return ""
     s = event.strip()
-    # Drop trailing ellipses / multiple dots / dangling commas/semicolons.
     s = re.sub(r"[\.…]{2,}\s*$", "", s)
     s = re.sub(r"[,;:\s]+$", "", s)
     if s and s[0].isalpha() and s[0] != s[0].upper():
@@ -982,6 +988,30 @@ def _competitor_narrative(item: Dict[str, Any], styles: dict) -> Paragraph:
     event = _polish_event_text(_sanitize(str(item.get("event", ""))))
     narrative = f"<b>{company}:</b> {event}" if event else f"<b>{company}.</b>"
     return Paragraph(narrative, styles["BodyStyle"])
+
+
+# FIX 3: helper to extract deduplicated competitor names per CI sub-section
+def _extract_ci_competitor_names(grouped_insights: List[Dict[str, Any]]) -> Dict[str, List[str]]:
+    """Returns {category: [company, ...]} with duplicates removed, skipping empty items."""
+    result: Dict[str, List[str]] = {}
+    for group in grouped_insights:
+        if not isinstance(group, dict):
+            continue
+        category = str(group.get("category", "")).strip()
+        if not category:
+            continue
+        seen: set = set()
+        names: List[str] = []
+        for item in group.get("items", []):
+            if not (isinstance(item, dict) and not _is_empty_value(item)):
+                continue
+            company = str(item.get("company", "")).strip()
+            if company and company.lower() not in seen:
+                seen.add(company.lower())
+                names.append(company)
+        if names:
+            result[category] = names
+    return result
 
 
 def render_newsletter_pdf(newsletter: Dict[str, Any], out_path: str) -> None:
@@ -1039,28 +1069,27 @@ def render_newsletter_pdf(newsletter: Dict[str, Any], out_path: str) -> None:
     if valid_caveats:
         sections_to_render.append("Method & Caveats")
 
-    # Cover page (always retained)
+    # Cover page
     story.append(Spacer(1, 0.9 * inch))
     story.append(Paragraph(_sanitize(str(cover.get("title", "Housing Finance Weekly Digest"))), styles["TitleStyle"]))
     story.append(Paragraph(_sanitize(str(cover.get("date_range", "Reporting period not specified"))), styles["CoverMetaStyle"]))
     story.append(Paragraph("Regulatory, Industry & Competitive Intelligence", styles["SubtitleStyle"]))
     story.append(PageBreak())
 
-    # Index page (always retained).
-    # Numbered-card layout: each section is a horizontal card with a colour-tinted number
-    # badge on the left and the section name (plus sub-items where relevant) on the right.
-    # Only Competitor Intelligence carries sub-items; the others are intentionally
-    # uncluttered.
+    # ------------------------------------------------------------------ #
+    # Index page                                                           #
+    # FIX 3: Competitor Intelligence sub-cards now list actual competitor  #
+    # names drawn dynamically from grouped_insights.                       #
+    # ------------------------------------------------------------------ #
     story.append(Paragraph("Index", styles["TitleStyle"]))
     story.append(_separator())
     story.append(Spacer(1, 0.1 * inch))
 
+    # Pre-compute competitor names per sub-section for the index
+    ci_competitor_names = _extract_ci_competitor_names(valid_groups)
+
     def _index_card(label: str, accent_hex: str, *, width: float = 6.5 * inch,
                     bg: str = "#F7F9FC") -> Table:
-        """A single index card: slim coloured strip on the left + bold label on a soft
-        panel on the right. Used both for top-level sections and for the indented
-        Competitor Intelligence sub-section sub-cards.
-        """
         label_para = Paragraph(
             f"<font color='{accent_hex}'><b>{_sanitize(label)}</b></font>",
             styles["IndexPrimaryStyle"],
@@ -1079,15 +1108,50 @@ def render_newsletter_pdf(newsletter: Dict[str, Any], out_path: str) -> None:
             ("RIGHTPADDING", (0, 0), (0, 0), 0),
             ("LEFTPADDING",  (1, 0), (1, 0), 14),
             ("RIGHTPADDING", (1, 0), (1, 0), 14),
-            ("TOPPADDING",   (0, 0), (-1, -1), 12),
-            ("BOTTOMPADDING",(0, 0), (-1, -1), 12),
+            ("TOPPADDING", (0, 0), (-1, -1), 8),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+            ("BOX",          (0, 0), (-1, -1), 0.5, colors.HexColor("#D2D7E2")),
+        ]))
+        return card
+
+    def _index_card_with_names(label: str, accent_hex: str, names: List[str],
+                               *, width: float = 6.15 * inch,
+                               bg: str = "#F7F9FC") -> Table:
+        """Sub-section card that also lists competitor names below the label."""
+        cell_content: List[Paragraph] = [
+            Paragraph(
+                f"<font color='{accent_hex}'><b>{_sanitize(label)}</b></font>",
+                styles["IndexPrimaryStyle"],
+            )
+        ]
+        for name in names:
+            cell_content.append(
+                Paragraph(
+                    f"<font color='#374151'>– {_sanitize(name)}</font>",
+                    styles["IndexCompetitorStyle"],
+                )
+            )
+        strip_w = 0.18 * inch
+        card = Table(
+            [["", cell_content]],
+            colWidths=[strip_w, width - strip_w],
+            hAlign="LEFT",
+        )
+        card.setStyle(TableStyle([
+            ("BACKGROUND",   (0, 0), (0, 0), colors.HexColor(accent_hex)),
+            ("BACKGROUND",   (1, 0), (1, 0), colors.HexColor(bg)),
+            ("VALIGN",       (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING",  (0, 0), (0, 0), 0),
+            ("RIGHTPADDING", (0, 0), (0, 0), 0),
+            ("LEFTPADDING",  (1, 0), (1, 0), 14),
+            ("RIGHTPADDING", (1, 0), (1, 0), 14),
+            ("TOPPADDING",   (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING",(0, 0), (-1, -1), 6),
             ("BOX",          (0, 0), (-1, -1), 0.5, colors.HexColor("#D2D7E2")),
         ]))
         return card
 
     def _indent_flowable(flow: Any, indent: float = 0.35 * inch) -> Table:
-        """Wrap a flowable in a transparent two-column table so it appears indented
-        from the left. Used for Competitor Intelligence sub-cards inside the Index."""
         wrap = Table([["", flow]], colWidths=[indent, 6.5 * inch - indent], hAlign="LEFT")
         wrap.setStyle(TableStyle([
             ("LEFTPADDING",  (0, 0), (-1, -1), 0),
@@ -1099,31 +1163,31 @@ def render_newsletter_pdf(newsletter: Dict[str, Any], out_path: str) -> None:
 
     for item in [it for it in NEWSLETTER_INDEX_ITEMS if not _is_empty_value(it)]:
         accent = INDEX_SECTION_COLORS.get(item, "#0F2D63")
-        story.append(_index_card(item, accent))
-        story.append(Spacer(1, 0.1 * inch))
 
-        # For Competitor Intelligence, render each sub-section as its own indented
-        # coloured sub-card — no bullets, just a smaller version of the same card style
-        # in the sub-section's unique colour.
+        story.append(_index_card(item, accent))
+        story.append(Spacer(1, 0.08 * inch))
+
         if item == "Competitor Intelligence":
+            ci_blocks = []
+
             for sub in NEWSLETTER_INDEX_SUBITEMS.get("Competitor Intelligence", []):
                 sub_color = CI_SUBSECTION_COLORS.get(sub, "#475569")
-                sub_card = _index_card(sub, sub_color, width=6.15 * inch)
-                story.append(_indent_flowable(sub_card))
-                story.append(Spacer(1, 0.08 * inch))
-            story.append(Spacer(1, 0.06 * inch))
+                names_for_sub = ci_competitor_names.get(sub, [])
+
+                if names_for_sub:
+                    sub_card = _index_card_with_names(sub, sub_color, names_for_sub)
+                else:
+                    sub_card = _index_card(sub, sub_color, width=6.15 * inch)
+
+                ci_blocks.append(_indent_flowable(sub_card))
+                ci_blocks.append(Spacer(1, 0.05 * inch))
+
+            story.append(KeepTogether(ci_blocks))
+            story.append(Spacer(1, 0.04 * inch))
 
     story.append(PageBreak())
 
     section_started = False
-
-    # A4 usable height is ~9.4" after our top/bottom margins, so the "blank-page-between-
-    # sections" guard threshold of 8" means: break to a new page only if less than 8"
-    # remain (i.e. the current page is genuinely fillled). If the previous section
-    # overflowed by a hair and ReportLab implicitly opened a fresh page, we're at the
-    # top with ~9.4" remaining — the CondPageBreak skips and the new section's heading
-    # lands on this otherwise-blank page rather than triggering a second break (which
-    # was producing the blank "page 5").
     _SECTION_BREAK_THRESHOLD = 8 * inch
 
     def _start_section() -> None:
@@ -1132,10 +1196,6 @@ def render_newsletter_pdf(newsletter: Dict[str, Any], out_path: str) -> None:
             story.append(CondPageBreak(_SECTION_BREAK_THRESHOLD))
         section_started = True
 
-    # At a glance (3 structured blocks)
-    # At-a-Glance Industry bullets pull ONLY the short 'pointer' from each highlight.
-    # Industry highlights are now {pointer, impact, why_it_matters} dicts (see prompts.py).
-    # Legacy string highlights are kept as-is for backward compatibility with old caches.
     def _bullet_from_highlight(h: Any) -> str:
         if isinstance(h, dict):
             return str(h.get("pointer") or h.get("headline") or "").strip()
@@ -1162,8 +1222,6 @@ def render_newsletter_pdf(newsletter: Dict[str, Any], out_path: str) -> None:
         _start_section()
         story.append(Paragraph("At a Glance", styles["SectionHeaderStyle"]))
         glance_rows: List[List[List[Paragraph]]] = []
-        # Only render groups that have at least one bullet. Empty groups are dropped
-        # entirely rather than padded with "Not found in source reviewed".
         for heading, bullets in [("Industry", industry_bullets), ("Regulatory", reg_bullets), ("Competitor", comp_bullets)]:
             clean_bullets = [b for b in (bullets or []) if not _is_empty_value(b)]
             if not clean_bullets:
@@ -1190,10 +1248,12 @@ def render_newsletter_pdf(newsletter: Dict[str, Any], out_path: str) -> None:
             )
             story.append(glance_table)
             story.append(Spacer(1, 0.2 * inch))
-        # If glance_rows is empty all three sub-groups had nothing — the entire At a
-        # Glance section is dropped (the heading already pushed above will look slightly
-        # orphaned, but in practice this branch triggers only on near-empty digests).
 
+    # ------------------------------------------------------------------ #
+    # Industry Pulse                                                        #
+    # FIX 1: _box_divider() between consecutive callout boxes              #
+    # FIX 4: section_key passed to _insight_box for per-section bg colour  #
+    # ------------------------------------------------------------------ #
     if not _is_empty_value(industry_pulse):
         _start_section()
         ip_color = INDEX_SECTION_COLORS.get("Industry Pulse", "#1B7A3A")
@@ -1204,22 +1264,20 @@ def render_newsletter_pdf(newsletter: Dict[str, Any], out_path: str) -> None:
         story.append(_separator())
         summary = str(industry_pulse.get("summary_paragraph", "")).strip()
         if not _is_empty_value(summary):
-            story.append(_insight_box("Summary", summary, styles, accent_hex=ip_color))
+            story.append(_summary_hero_box(summary, styles, accent_hex=ip_color))
+            story.append(Spacer(1, 0.25 * inch))  
 
         raw_highlights = industry_pulse.get("highlights", []) or []
         if raw_highlights:
-            story.append(Spacer(1, 0.12 * inch))
-            # Render each highlight EXACTLY like a Regulatory Watch entry:
-            #   - tinted "Industry Update" callout box with the pointer headline
-            #   - "Impact:" paragraph
-            #   - "Why it matters:" paragraph
-            # New shape: each highlight is {pointer, impact, why_it_matters}.
-            # Legacy shape: list of plain strings — fall back to matching a summary
-            # sentence as the elaboration body (no Impact / Why-it-matters).
+            story.append(Spacer(1, 0.20 * inch))
             sentences = _split_sentences(summary)
             used_sentences: set = set()
 
-            for h in raw_highlights[:3]:
+            for h_idx, h in enumerate(raw_highlights[:3]):
+                # FIX 1: add subtle divider between consecutive highlight boxes
+                if h_idx > 0:
+                    story.append(_box_divider())
+
                 if isinstance(h, dict):
                     pointer = str(h.get("pointer") or h.get("headline") or "").strip()
                     impact = str(h.get("impact") or "").strip()
@@ -1232,18 +1290,13 @@ def render_newsletter_pdf(newsletter: Dict[str, Any], out_path: str) -> None:
                 if not pointer:
                     continue
 
-                # Callout heading is a 6-10 word distillation of the pointer (per review:
-                # never the literal "Industry Update"). Left-edge accent matches the
-                # section's colour on the Index page so the reader can trace it.
-                # Whole highlight is wrapped in KeepTogether so callout + Impact +
-                # Why-it-matters stay on the same page (avoids orphaned headers and the
-                # "callout pushes to next page but body stays" split that was producing
-                # near-empty pages between sections).
                 box_heading = _short_heading(pointer) or "Industry Update"
+                # FIX 2: wrap entire highlight block (box + impact + why) in KeepTogether
                 highlight_group: List[Any] = [
                     _insight_box(
                         box_heading, pointer, styles,
-                        accent_hex=INDEX_SECTION_COLORS.get("Industry Pulse"),
+                        accent_hex=ip_color,
+                        section_key="Industry Pulse",
                     ),
                     Spacer(1, 0.08 * inch),
                 ]
@@ -1259,8 +1312,6 @@ def render_newsletter_pdf(newsletter: Dict[str, Any], out_path: str) -> None:
                         styles["BodyStyle"],
                     ))
 
-                # Legacy-string fallback: no impact/why fields, so surface a relevant
-                # sentence from summary_paragraph as the elaboration paragraph instead.
                 if not isinstance(h, dict):
                     deeper = _best_sentence_for_highlight(pointer, sentences, used_sentences)
                     if deeper:
@@ -1268,12 +1319,16 @@ def render_newsletter_pdf(newsletter: Dict[str, Any], out_path: str) -> None:
                         if not _is_near_duplicate(pointer, deeper):
                             highlight_group.append(Paragraph(_sanitize(deeper), styles["BodyStyle"]))
 
+                # FIX 2: KeepTogether prevents the box splitting across pages
                 story.append(KeepTogether(highlight_group))
                 story.append(Spacer(1, 0.18 * inch))
-        # NOTE: no trailing spacer here. A bottom-of-section spacer can overflow onto
-        # the next page and, combined with _start_section()'s unconditional PageBreak,
-        # leave a blank page between sections. _start_section() handles separation.
 
+    # ------------------------------------------------------------------ #
+    # Regulatory Watch                                                      #
+    # FIX 1: _box_divider() between entries                                #
+    # FIX 2: each entry fully wrapped in KeepTogether                      #
+    # FIX 4: section_key="Regulatory Watch" for bg colour                  #
+    # ------------------------------------------------------------------ #
     if valid_regulatory:
         _start_section()
         rw_color = INDEX_SECTION_COLORS.get("Regulatory Watch", "#C8102E")
@@ -1282,12 +1337,16 @@ def render_newsletter_pdf(newsletter: Dict[str, Any], out_path: str) -> None:
             styles["SectionHeaderStyle"],
         ))
         story.append(_separator())
-        for row in valid_regulatory:
-            title = str(row.get("title", "")).strip()
+        for reg_idx, row in enumerate(valid_regulatory):
+            # FIX 1: divider between consecutive entries
+            if reg_idx > 0:
+                story.append(_box_divider())
+
+            title_text = str(row.get("title", "")).strip()
             what = str(row.get("what_happened", "")).strip()
             impact = str(row.get("impact", "")).strip()
             why = str(row.get("why_it_matters", "")).strip()
-            paragraph_1 = " ".join([part for part in [title, what] if part and not _is_empty_value(part)]).strip()
+            paragraph_1 = " ".join([part for part in [title_text, what] if part and not _is_empty_value(part)]).strip()
             impact_line = (
                 f"<font color='#2CA6A4'><b>Impact</b></font>: {_sanitize(impact)}"
                 if impact and not _is_empty_value(impact) else ""
@@ -1296,26 +1355,24 @@ def render_newsletter_pdf(newsletter: Dict[str, Any], out_path: str) -> None:
                 f"<font color='#2CA6A4'><b>Why it matters</b></font>: {_sanitize(why)}"
                 if why and not _is_empty_value(why) else ""
             )
-            # Callout heading is a 6-10 word distillation of the title (per review:
-            # never the literal "Regulatory Update"). Body keeps the full paragraph
-            # for context. Left-edge accent matches the section's Index colour.
-            # Each regulatory entry is wrapped in KeepTogether so it can't split
-            # awkwardly across page boundaries.
+
+            # FIX 2: entire entry in KeepTogether to prevent page-split mid-card
             entry_group: List[Any] = []
             if paragraph_1:
-                box_heading = _short_heading(title) or "Regulatory Update"
+                box_heading = _short_heading(title_text) or "Regulatory Update"
                 entry_group.append(_insight_box(
                     box_heading, paragraph_1, styles,
-                    accent_hex=INDEX_SECTION_COLORS.get("Regulatory Watch"),
+                    accent_hex=rw_color,
+                    section_key="Regulatory Watch",
                 ))
                 entry_group.append(Spacer(1, 0.08 * inch))
             if impact_line:
                 entry_group.append(Paragraph(impact_line, styles["BodyStyle"]))
             if why_line:
                 entry_group.append(Paragraph(why_line, styles["BodyStyle"]))
-            if title and (what or impact or why):
+            if title_text and (what or impact or why):
                 narrative = (
-                    f"<b>Narrative:</b> { _sanitize(title) } reflects an active supervisory posture. "
+                    f"<b>Narrative:</b> {_sanitize(title_text)} reflects an active supervisory posture. "
                     f"Institutions should map this to compliance execution, disclosure quality, and funding strategy."
                 )
                 entry_group.append(Paragraph(narrative, styles["BodyStyle"]))
@@ -1323,6 +1380,12 @@ def render_newsletter_pdf(newsletter: Dict[str, Any], out_path: str) -> None:
                 story.append(KeepTogether(entry_group))
             story.append(Spacer(1, 0.22 * inch))
 
+    # ------------------------------------------------------------------ #
+    # Competitor Intelligence                                               #
+    # FIX 1: _box_divider() between consecutive competitor boxes           #
+    # FIX 2: each competitor item fully in KeepTogether                    #
+    # FIX 4: section_key=category for sub-section bg colours               #
+    # ------------------------------------------------------------------ #
     if valid_groups:
         _start_section()
         ci_color = INDEX_SECTION_COLORS.get("Competitor Intelligence", "#0F2D63")
@@ -1334,42 +1397,51 @@ def render_newsletter_pdf(newsletter: Dict[str, Any], out_path: str) -> None:
         for group in valid_groups:
             category = str(group.get("category", "Category"))
             accent = CI_SUBSECTION_COLORS.get(category)
-            # Coloured sub-section heading — each of the four buckets gets its own colour
-            # (green / amber / red / blue) so the reader can scan them at a glance.
+            story.append(CondPageBreak(2.8 * inch))
+
             if accent:
                 story.append(Paragraph(
                     f"<font color='{accent}'>{_sanitize(category)}</font>",
                     styles["SubsectionHeaderStyle"],
                 ))
             else:
-                story.append(Paragraph(_sanitize(category), styles["SubsectionHeaderStyle"]))
+                story.append(Paragraph(
+                    _sanitize(category),
+                    styles["SubsectionHeaderStyle"]
+                ))
+            valid_items = [
+                item for item in group.get("items", [])
+                if isinstance(item, dict) and not _is_empty_value(item)
+            ]
+            for item_idx, item in enumerate(valid_items):
+                # FIX 1: subtle hairline divider between consecutive boxes
+                if item_idx > 0:
+                    story.append(_box_divider())
 
-            for item in group.get("items", []):
-                if not (isinstance(item, dict) and not _is_empty_value(item)):
-                    continue
                 company = str(item.get("company", "Competitor"))
                 event = _polish_event_text(str(item.get("event", "")))
                 narrative_raw = str(item.get("narrative", "")).strip()
                 narrative = _polish_event_text(narrative_raw) if narrative_raw else ""
-                # Defensive: if narrative is just a paraphrase of event (case-insensitive
-                # near-equality), drop it to avoid the duplication the user flagged.
                 if narrative and _is_near_duplicate(event, narrative):
                     narrative = ""
 
-                # Highlighted box with section-coloured left-edge accent.
-                story.append(_insight_box(
-                    company,
-                    event or "Not found in source reviewed",
-                    styles,
-                    accent_hex=accent,
-                ))
-                # Breathing space between the box and the narrative paragraph.
-                story.append(Spacer(1, 0.08 * inch))
-                # Paragraph: the elaboration. Skip entirely if the composer didn't
-                # produce a distinct narrative — better empty space than duplicate text.
+                # FIX 2: box + narrative in KeepTogether to prevent orphaned narrative
+                item_group: List[Any] = [
+                    _insight_box(
+                        company,
+                        event or "Not found in source reviewed",
+                        styles,
+                        accent_hex=accent,
+                        section_key=category,  # FIX 4
+                    ),
+                    Spacer(1, 0.08 * inch),
+                ]
                 if narrative:
-                    story.append(Paragraph(_sanitize(narrative), styles["BodyStyle"]))
+                    item_group.append(Paragraph(_sanitize(narrative), styles["BodyStyle"]))
+
+                story.append(KeepTogether(item_group))
                 story.append(Spacer(1, 0.18 * inch))
+
             story.append(Spacer(1, 0.1 * inch))
 
     if valid_patterns:
@@ -1400,7 +1472,6 @@ def render_newsletter_pdf(newsletter: Dict[str, Any], out_path: str) -> None:
         ))
         story.append(_separator())
         story.extend(_bullets(valid_takeaways[:5], styles))
-        # No trailing section-end Spacer — avoids the blank-page-between-sections artifact.
 
     if valid_caveats:
         _start_section()
