@@ -346,9 +346,49 @@ def _separator() -> HRFlowable:
 
 # FIX 1: subtle thin divider between consecutive insight boxes
 def _box_divider() -> HRFlowable:
-    """Very light hairline divider between consecutive callout boxes.
-    Provides visual separation without adding excessive whitespace."""
-    return HRFlowable(width="100%", thickness=0.4, color=colors.HexColor("#E2E8F0"), spaceBefore=4, spaceAfter=4)
+    """Prominent dashed divider between consecutive callout boxes.
+
+    Per review committee, the prior hairline (0.4pt solid #E2E8F0) was too subtle.
+    This version is thicker, darker, and dashed so the bifurcation between two
+    back-to-back highlighted boxes is unambiguously visible.
+    """
+    return HRFlowable(
+        width="60%",
+        thickness=1.5,
+        color=colors.HexColor("#5B6B82"),   # slate — clearly visible against page bg
+        dash=[4, 3],                        # dashed pattern
+        spaceBefore=12,
+        spaceAfter=14,
+        hAlign="LEFT",
+    )
+
+
+def _compose_ci_body(event: str, narrative: str) -> str:
+    """Build the Competitor Intelligence body sentence for non-Operational categories.
+
+    Concatenates the event sentence and the explanatory narrative as one flowing
+    block. NO truncation and NO ellipsis are applied — per review, this is a formal
+    newsletter and the LLM is now expected to keep the explanation tight (~2-3 lines).
+    """
+    event = (event or "").strip()
+    narrative = (narrative or "").strip()
+    if not event and not narrative:
+        return "No source-backed update for this period."
+    if not narrative:
+        return event
+    if not event:
+        return narrative
+    return f"{event} {narrative}".strip()
+
+
+def _fallback_narrative(event: str, company: str) -> str:
+    """Render a clearly-marked generic write-up under callouts whose `narrative`
+    field was left blank by the composer LLM. Avoids the layout artefact where
+    one box is followed immediately by the next with no body text in between."""
+    return (
+        "Further commentary on this filing was not generated for the current digest. "
+        "It is included as part of the company's regulatory disclosures for the period."
+    )
 
 
 # FIX: single, correct _header_footer — previous version had stray Table code injected
@@ -1263,13 +1303,20 @@ def render_newsletter_pdf(newsletter: Dict[str, Any], out_path: str) -> None:
         ))
         story.append(_separator())
         summary = str(industry_pulse.get("summary_paragraph", "")).strip()
+        summary_rendered = False
         if not _is_empty_value(summary):
             story.append(_summary_hero_box(summary, styles, accent_hex=ip_color))
-            story.append(Spacer(1, 0.25 * inch))  
+            summary_rendered = True
 
         raw_highlights = industry_pulse.get("highlights", []) or []
         if raw_highlights:
-            story.append(Spacer(1, 0.20 * inch))
+            # Bifurcate the Summary callout from the first Industry Update callout
+            # with the same prominent dashed divider used between successive
+            # highlights, so the visual rhythm is consistent across the section.
+            if summary_rendered:
+                story.append(_box_divider())
+            else:
+                story.append(Spacer(1, 0.20 * inch))
             sentences = _split_sentences(summary)
             used_sentences: set = set()
 
@@ -1290,11 +1337,18 @@ def render_newsletter_pdf(newsletter: Dict[str, Any], out_path: str) -> None:
                 if not pointer:
                     continue
 
-                box_heading = _short_heading(pointer) or "Industry Update"
-                # FIX 2: wrap entire highlight block (box + impact + why) in KeepTogether
+                # Stripped-callout layout:
+                #   - the highlighted box carries the FULL self-explanatory pointer
+                #     sentence (~15-20 words, one line). The earlier 6-10 word
+                #     distillation has been dropped per review — the reader saw the
+                #     same fact twice (once as truncated headline, once as full sentence
+                #     below) which felt redundant.
+                #   - box body is empty; only the pointer sits in the tinted card
+                #   - Impact + Why-it-matters follow as labelled paragraphs below
                 highlight_group: List[Any] = [
                     _insight_box(
-                        box_heading, pointer, styles,
+                        pointer, "",                     # pointer IS the box headline
+                        styles,
                         accent_hex=ip_color,
                         section_key="Industry Pulse",
                     ),
@@ -1356,12 +1410,20 @@ def render_newsletter_pdf(newsletter: Dict[str, Any], out_path: str) -> None:
                 if why and not _is_empty_value(why) else ""
             )
 
-            # FIX 2: entire entry in KeepTogether to prevent page-split mid-card
+            # Stripped-callout layout:
+            #   - the highlighted box carries the FULL self-explanatory sentence —
+            #     'what_happened' if present (it's typically the descriptive one-liner),
+            #     otherwise the title. The earlier 6-10 word distillation has been
+            #     dropped per review (it duplicated the sentence below).
+            #   - box body is empty
+            #   - Impact / Why-it-matters / Narrative follow as labelled paragraphs
+            # Entire entry wrapped in KeepTogether to avoid mid-card page splits.
             entry_group: List[Any] = []
-            if paragraph_1:
-                box_heading = _short_heading(title_text) or "Regulatory Update"
+            box_headline = (what or title_text or "").strip()
+            if box_headline:
                 entry_group.append(_insight_box(
-                    box_heading, paragraph_1, styles,
+                    box_headline, "",                # box headline = the sentence; body empty
+                    styles,
                     accent_hex=rw_color,
                     section_key="Regulatory Watch",
                 ))
@@ -1370,12 +1432,10 @@ def render_newsletter_pdf(newsletter: Dict[str, Any], out_path: str) -> None:
                 entry_group.append(Paragraph(impact_line, styles["BodyStyle"]))
             if why_line:
                 entry_group.append(Paragraph(why_line, styles["BodyStyle"]))
-            if title_text and (what or impact or why):
-                narrative = (
-                    f"<b>Narrative:</b> {_sanitize(title_text)} reflects an active supervisory posture. "
-                    f"Institutions should map this to compliance execution, disclosure quality, and funding strategy."
-                )
-                entry_group.append(Paragraph(narrative, styles["BodyStyle"]))
+            # Narrative line removed per review — the previous boilerplate ('… reflects
+            # an active supervisory posture. Institutions should map this to compliance
+            # execution …') added no information beyond the box headline + Impact +
+            # Why-it-matters, and read as repetitive filler.
             if entry_group:
                 story.append(KeepTogether(entry_group))
             story.append(Spacer(1, 0.22 * inch))
@@ -1425,20 +1485,35 @@ def render_newsletter_pdf(newsletter: Dict[str, Any], out_path: str) -> None:
                 if narrative and _is_near_duplicate(event, narrative):
                     narrative = ""
 
-                # FIX 2: box + narrative in KeepTogether to prevent orphaned narrative
+                # Competitor Intelligence layout:
+                #   - the highlighted box contains JUST the company name (uniform across
+                #     all four CI sub-sections)
+                #   - the body below depends on the sub-section:
+                #
+                # OPERATIONAL SIGNALS: body = event sentence only (~1 line). The event
+                #   already carries the full who / what / when.
+                #
+                # GROWTH & STRATEGY / FUNDING & CAPITAL / RISK & GOVERNANCE:
+                #   body = event + short narrative concatenated, CAPPED AT ~2 LINES
+                #   (~170 chars). The narrative gives a one-clause explanation of the
+                #   strategic angle. Overflow is truncated at the nearest word boundary
+                #   so the box doesn't grow taller than the rest of the section.
+                if category == "Operational Signals":
+                    body_text = event or "No source-backed update for this period."
+                else:
+                    body_text = _compose_ci_body(event, narrative)
+
                 item_group: List[Any] = [
                     _insight_box(
                         company,
-                        event or "Not found in source reviewed",
+                        "",                              # box body intentionally empty
                         styles,
                         accent_hex=accent,
-                        section_key=category,  # FIX 4
+                        section_key=category,
                     ),
                     Spacer(1, 0.08 * inch),
+                    Paragraph(_sanitize(body_text), styles["BodyStyle"]),
                 ]
-                if narrative:
-                    item_group.append(Paragraph(_sanitize(narrative), styles["BodyStyle"]))
-
                 story.append(KeepTogether(item_group))
                 story.append(Spacer(1, 0.18 * inch))
 
