@@ -345,23 +345,30 @@ def _separator() -> HRFlowable:
 
 
 # FIX 1: subtle thin divider between consecutive insight boxes
-def _box_divider() -> HRFlowable:
+# def _box_divider() -> HRFlowable:
     """Prominent dashed divider between consecutive callout boxes.
 
     Per review committee, the prior hairline (0.4pt solid #E2E8F0) was too subtle.
     This version is thicker, darker, and dashed so the bifurcation between two
     back-to-back highlighted boxes is unambiguously visible.
     """
+    # return HRFlowable(
+    #     width="60%",
+    #     thickness=1.5,
+    #     color=colors.HexColor("#5B6B82"),   # slate — clearly visible against page bg
+    #     dash=[4, 3],                        # dashed pattern
+    #     spaceBefore=12,
+    #     spaceAfter=14,
+    #     hAlign="LEFT",
+    # )
+def _box_divider():
     return HRFlowable(
-        width="60%",
-        thickness=1.5,
-        color=colors.HexColor("#5B6B82"),   # slate — clearly visible against page bg
-        dash=[4, 3],                        # dashed pattern
+        width="100%",
+        thickness=1.0,
+        color=colors.HexColor("#C9D8EA"),
         spaceBefore=12,
-        spaceAfter=14,
-        hAlign="LEFT",
+        spaceAfter=12,
     )
-
 
 def _compose_ci_body(event: str, narrative: str) -> str:
     """Build the Competitor Intelligence body sentence for non-Operational categories.
@@ -1306,6 +1313,7 @@ def render_newsletter_pdf(newsletter: Dict[str, Any], out_path: str) -> None:
         summary_rendered = False
         if not _is_empty_value(summary):
             story.append(_summary_hero_box(summary, styles, accent_hex=ip_color))
+            story.append(_box_divider())
             summary_rendered = True
 
         raw_highlights = industry_pulse.get("highlights", []) or []
@@ -1313,17 +1321,14 @@ def render_newsletter_pdf(newsletter: Dict[str, Any], out_path: str) -> None:
             # Bifurcate the Summary callout from the first Industry Update callout
             # with the same prominent dashed divider used between successive
             # highlights, so the visual rhythm is consistent across the section.
-            if summary_rendered:
-                story.append(_box_divider())
-            else:
+            if not summary_rendered:
                 story.append(Spacer(1, 0.20 * inch))
             sentences = _split_sentences(summary)
             used_sentences: set = set()
 
             for h_idx, h in enumerate(raw_highlights[:3]):
                 # FIX 1: add subtle divider between consecutive highlight boxes
-                if h_idx > 0:
-                    story.append(_box_divider())
+                
 
                 if isinstance(h, dict):
                     pointer = str(h.get("pointer") or h.get("headline") or "").strip()
@@ -1393,8 +1398,8 @@ def render_newsletter_pdf(newsletter: Dict[str, Any], out_path: str) -> None:
         story.append(_separator())
         for reg_idx, row in enumerate(valid_regulatory):
             # FIX 1: divider between consecutive entries
-            if reg_idx > 0:
-                story.append(_box_divider())
+            # if reg_idx > 0:
+            #     story.append(_box_divider())
 
             title_text = str(row.get("title", "")).strip()
             what = str(row.get("what_happened", "")).strip()
@@ -1475,8 +1480,8 @@ def render_newsletter_pdf(newsletter: Dict[str, Any], out_path: str) -> None:
             ]
             for item_idx, item in enumerate(valid_items):
                 # FIX 1: subtle hairline divider between consecutive boxes
-                if item_idx > 0:
-                    story.append(_box_divider())
+                # if item_idx > 0:
+                #     story.append(_box_divider())
 
                 company = str(item.get("company", "Competitor"))
                 event = _polish_event_text(str(item.get("event", "")))
