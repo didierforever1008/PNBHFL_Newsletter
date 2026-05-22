@@ -41,7 +41,7 @@ SHARED_RULES = (
 
 def weekly_newsletter_prompt(company: str, week_start: str, week_end: str, today_iso: str, articles_block: str) -> str:
     schema = {
-        "title": f"Weekly Intelligence Newsletter: {company}",
+        "title": f"Bi-Weekly Intelligence Newsletter: {company}",
         "executive_summary": ["3-6 concise bullet points"],
         "top_signals": [
             {
@@ -104,7 +104,7 @@ def weekly_company_intelligence_prompt(company: str, week_start: str, week_end: 
 
 def weekly_digest_aggregate_prompt(week_start: str, week_end: str, sections_json: str) -> str:
     schema = {
-        "title": f"Weekly Competitor Digest ({week_start} to {week_end})",
+        "title": f"Bi-Weekly Competitor Digest ({week_start} to {week_end})",
         "executive_summary": ["4-8 bullets covering cross-company shifts"],
         "cross_company_themes": ["string"],
         "caveats": ["string"],
@@ -130,7 +130,7 @@ def weekly_digest_agentic_analysis_prompt(
     competitor_list: List[str],
 ) -> str:
     schema = {
-        "title": f"Weekly Housing Finance Industry Agentic Analysis ({week_start} to {week_end})",
+        "title": f"Bi-Weekly Housing Finance Industry Agentic Analysis ({week_start} to {week_end})",
         "time_period": f"{week_start} to {week_end}",
         "industry_summary": ["4-8 concise bullets on industry-wide movement"],
         "regulatory_updates": [
@@ -287,7 +287,7 @@ def weekly_digest_agentic_from_summaries_prompt(
     competitor_list: List[str],
 ) -> str:
     schema = {
-        "title": f"Weekly Housing Finance Industry Agentic Analysis ({week_start} to {week_end})",
+        "title": f"Bi-Weekly Housing Finance Industry Agentic Analysis ({week_start} to {week_end})",
         "time_period": f"{week_start} to {week_end}",
         "industry_summary": ["4-8 concise bullets on industry-wide movement"],
         "regulatory_updates": [
@@ -416,7 +416,7 @@ def weekly_digest_agentic_final_synthesis_prompt(
     competitor_json: str,
 ) -> str:
     schema = {
-        "title": f"Weekly Housing Finance Industry Agentic Analysis ({week_start} to {week_end})",
+        "title": f"Bi-Weekly Housing Finance Industry Agentic Analysis ({week_start} to {week_end})",
         "time_period": f"{week_start} to {week_end}",
         "industry_summary": ["4-8 concise bullets on industry-wide movement"],
         "regulatory_updates": [
@@ -701,7 +701,13 @@ def newsletter_composer_prompt(
         "- For EACH competitor item, produce 'event' and (for non-Operational categories)\n"
         "  a substantive 'narrative'. The renderer concatenates them below the company-name\n"
         "  box and renders the full text in flowing prose — NO truncation, NO ellipsis. Plan\n"
-        "  for ~2-3 typeset lines of total content:\n"
+        "  for ~2-3 typeset lines of total content.\n"
+        "- DROP-IF-NO-NARRATIVE RULE: For Growth & Strategy / Funding & Capital / Risk &\n"
+        "  Governance, an item WITHOUT a real, distinct 'narrative' will be silently dropped\n"
+        "  by the renderer (better to show nothing than a one-line stub). So either write\n"
+        "  the narrative properly or do NOT emit the item at all. Routine filings with no\n"
+        "  meaningful read-through should be omitted from the grouped_insights output.\n"
+        "- Field shape:\n"
         "    * 'event'     = ONE complete factual sentence. The base news.\n"
         "                    For Operational Signals: name + action + position + effective date.\n"
         "                    For Growth & Strategy / Funding & Capital / Risk & Governance:\n"

@@ -211,7 +211,10 @@ def _render_only_from_cache(week_start: str, week_end: str, out: str) -> None:
     if not isinstance(cover, dict):
         cover = {}
     cover["date_range"] = f"{week_start} to {week_end}"
-    cover.setdefault("title", "Housing Finance Weekly Digest")
+    # Always force the current title (older caches may have "Weekly")
+    cached_title = str(cover.get("title", "") or "").strip()
+    if (not cached_title) or ("weekly" in cached_title.lower() and "bi-weekly" not in cached_title.lower()):
+        cover["title"] = "Housing Finance Bi-Weekly Digest"
     newsletter_raw["cover"] = cover
 
     agentic_pdf = str(Path(out).with_name(f"{Path(out).stem}_agentic_analysis.pdf"))
@@ -990,7 +993,7 @@ def _run_weekly_digest_agentic_analysis(
         parsed_json=raw,
     )
 
-    title = str(raw.get("title", f"Weekly Housing Finance Industry Agentic Analysis ({start} to {end})"))
+    title = str(raw.get("title", f"Bi-Weekly Housing Finance Industry Agentic Analysis ({start} to {end})"))
     time_period = str(raw.get("time_period", f"{start} to {end}"))
     industry_summary = [str(x) for x in raw.get("industry_summary", []) if str(x).strip()]
     if not industry_summary:
@@ -1171,7 +1174,7 @@ def _run_weekly_digest_agentic_analysis(
 
     if not isinstance(newsletter_raw.get("cover"), dict):
         newsletter_raw["cover"] = {}
-    newsletter_raw["cover"].setdefault("title", "Weekly Housing Finance Intelligence")
+    newsletter_raw["cover"].setdefault("title", "Bi-Weekly Housing Finance Intelligence")
     newsletter_raw["cover"].setdefault("date_range", time_period or f"{start} to {end}")
     newsletter_raw["cover"].setdefault("tagline", "Regulatory, Industry and Competitive Insights")
     newsletter_raw.setdefault(

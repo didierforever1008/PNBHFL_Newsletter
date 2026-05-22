@@ -160,7 +160,7 @@ def parse_weekly_bundle(data: Dict[str, Any]) -> ReportBundle:
     signals = [_parse_weekly_signal(s, company_fallback=str(data.get("company", ""))) for s in data.get("top_signals", []) if isinstance(s, dict)]
     return ReportBundle(
         report_type="weekly-newsletter",
-        title=data.get("title", "Weekly Intelligence Newsletter"),
+        title=data.get("title", "Bi-Weekly Intelligence Newsletter"),
         executive_summary=_as_text(data.get("executive_summary", "")),
         time_period=str(data.get("time_period", "")),
         news_sources=[str(s) for s in data.get("news_sources", []) if str(s).strip()],
@@ -194,7 +194,7 @@ def parse_weekly_digest_bundle(data: Dict[str, Any]) -> ReportBundle:
 
     return ReportBundle(
         report_type="weekly-digest",
-        title=data.get("title", "Weekly Competitor Digest"),
+        title=data.get("title", "Bi-Weekly Competitor Digest"),
         executive_summary=_as_text(data.get("executive_summary", "")),
         time_period=str(data.get("time_period", "")),
         news_sources=[str(s) for s in data.get("news_sources", []) if str(s).strip()],

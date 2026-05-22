@@ -404,7 +404,7 @@ def _header_footer(canvas, doc) -> None:  # type: ignore[no-untyped-def]
     width, height = A4
     canvas.setFont("Helvetica", 9)
     canvas.setFillColor(colors.HexColor("#666666"))
-    canvas.drawString(doc.leftMargin, height - 28, "Weekly Intelligence Report")
+    canvas.drawString(doc.leftMargin, height - 28, "Bi-Weekly Intelligence Report")
     canvas.drawRightString(width - doc.rightMargin, 20, f"Page {canvas.getPageNumber()}")
     canvas.restoreState()
 
@@ -454,14 +454,14 @@ def render_report_pdf(bundle: ReportBundle, out_path: str) -> None:
         rightMargin=0.7 * inch,
         topMargin=0.85 * inch,
         bottomMargin=0.7 * inch,
-        title=bundle.title or "Weekly Intelligence Report",
+        title=bundle.title or "Bi-Weekly Intelligence Report",
     )
 
     story = []
 
     # Cover page
     story.append(Spacer(1, 1.2 * inch))
-    story.append(Paragraph(_sanitize(bundle.title or "Weekly Intelligence Report"), styles["TitleStyle"]))
+    story.append(Paragraph(_sanitize(bundle.title or "Bi-Weekly Intelligence Report"), styles["TitleStyle"]))
     story.append(Spacer(1, 0.2 * inch))
     story.append(
         Paragraph(
@@ -471,7 +471,7 @@ def render_report_pdf(bundle: ReportBundle, out_path: str) -> None:
     )
     story.append(
         Paragraph(
-            "Consulting-grade competitive intelligence brief for weekly market and company signals",
+            "Consulting-grade competitive intelligence brief for bi-weekly market and company signals",
             styles["SubtitleStyle"],
         )
     )
@@ -872,7 +872,7 @@ def _cover_banner(width: float = 6.5 * inch, height: float = (6.5 / 3.0) * inch)
         String(
             0.42 * inch,
             height - 0.86 * inch,
-            "Housing Finance Weekly Digest",
+            "Housing Finance Bi-Weekly Digest",
             fontName="Helvetica-Bold",
             fontSize=24,
             fillColor=colors.Color(1, 1, 1, alpha=0.97),
@@ -914,14 +914,17 @@ def _split_date_range(date_range: str) -> tuple[str, str]:
 
 
 def _newsletter_page_decor(week_start: str, week_end: str):  # type: ignore[no-untyped-def]
-    candidate_paths = [
+    # PNB-HFL official logo — drawn in the top-right of every page.
+    # The PNG has been pre-processed so white is transparent; no backing tile needed.
+    right_candidate_paths = [
+        Path("pnb_housing_finance_ltd_logo.png"),
         Path("pnb_housing_finance_ltd_logo.jpeg"),
+        Path("/assets/pnb_housing_finance_ltd_logo.png"),
         Path("/assets/pnb_housing_finance_ltd_logo.jpeg"),
-        Path("image_bca198f4.png"),
-        Path("/assets/header_banner.png"),
     ]
-    logo_path = next((path for path in candidate_paths if path.exists()), None)
-    title = "Housing Finance Weekly Digest"
+    right_logo_path = next((p for p in right_candidate_paths if p.exists()), None)
+
+    title = "Housing Finance Bi-Weekly Digest"
     subtitle = "Regulatory, Industry & Competitive Intelligence"
     date_line = f"{week_start} to {week_end}"
 
@@ -935,18 +938,8 @@ def _newsletter_page_decor(week_start: str, week_end: str):  # type: ignore[no-u
         canvas.setFillColor(BRAND_YELLOW)
         canvas.rect(0, banner_y, width, 18, stroke=0, fill=1)
 
-        if logo_path:
-            canvas.drawImage(
-                ImageReader(str(logo_path)),
-                doc.leftMargin,
-                banner_y + 22,
-                width=95,
-                height=62,
-                preserveAspectRatio=True,
-                mask="auto",
-            )
-
-        text_x = doc.leftMargin + 108 if logo_path else doc.leftMargin
+        # Heading sits flush left now that the left-side image has been removed.
+        text_x = doc.leftMargin
         canvas.setFillColor(BRAND_YELLOW)
         canvas.setFont("Helvetica-Bold", 20)
         canvas.drawString(text_x, height - 40, title)
@@ -955,9 +948,28 @@ def _newsletter_page_decor(week_start: str, week_end: str):  # type: ignore[no-u
         canvas.drawString(text_x, height - 57, subtitle)
         canvas.setFont("Helvetica", 11)
         canvas.drawString(text_x, height - 73, date_line)
+
+        # Bottom-right PNB-HFL logo — transparent PNG sits directly on the page.
+        if right_logo_path:
+            logo_h = 32
+            logo_w = 112  # aspect ratio of the cropped logo is ~3.48:1
+            logo_x = width - doc.rightMargin - logo_w
+            logo_y = 22  # sits just above the page-number baseline
+            canvas.drawImage(
+                ImageReader(str(right_logo_path)),
+                logo_x,
+                logo_y,
+                width=logo_w,
+                height=logo_h,
+                preserveAspectRatio=True,
+                anchor="e",
+                mask="auto",
+            )
+
+        # Page number moves to the bottom-left so it doesn't collide with the logo.
         canvas.setFillColor(colors.HexColor("#444444"))
         canvas.setFont("Helvetica", 9)
-        canvas.drawRightString(width - doc.rightMargin, 20, f"Page {canvas.getPageNumber()}")
+        canvas.drawString(doc.leftMargin, 20, f"Page {canvas.getPageNumber()}")
         canvas.restoreState()
 
     return _draw
@@ -1038,8 +1050,56 @@ def _competitor_narrative(item: Dict[str, Any], styles: dict) -> Paragraph:
 
 
 # FIX 3: helper to extract deduplicated competitor names per CI sub-section
+def _ci_item_is_renderable(item: Dict[str, Any], category: str) -> bool:
+    """True if a Competitor Intelligence item will actually be rendered in the body.
+
+    Matches the drop-if-no-narrative rule applied in the body loop: for
+    non-Operational-Signals categories, the item must have a narrative that is
+    not just a paraphrase of the event. Operational Signals items are always
+    kept (the event sentence alone is informative enough).
+
+    Used by both the index (so listed competitor names match what the reader
+    sees in the body) and the body loop (so heading and items stay in sync).
+    """
+    if not isinstance(item, dict) or _is_empty_value(item):
+        return False
+    if category == "Operational Signals":
+        return True
+    event = _polish_event_text(str(item.get("event", "")))
+    narr_raw = str(item.get("narrative", "")).strip()
+    narr = _polish_event_text(narr_raw) if narr_raw else ""
+    if not narr:
+        return False
+    if _is_near_duplicate(event, narr):
+        return False
+    return True
+
+
+def _filter_groups_for_render(grouped_insights: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Return groups whose items have been filtered to only those that will
+    actually be rendered. Empty groups are dropped entirely. Pre-computed once
+    so the index and the body show identical content."""
+    out: List[Dict[str, Any]] = []
+    for group in grouped_insights:
+        if not isinstance(group, dict):
+            continue
+        category = str(group.get("category", "")).strip()
+        items = [
+            it for it in (group.get("items") or [])
+            if _ci_item_is_renderable(it, category)
+        ]
+        if not items:
+            continue
+        out.append({**group, "items": items})
+    return out
+
+
 def _extract_ci_competitor_names(grouped_insights: List[Dict[str, Any]]) -> Dict[str, List[str]]:
-    """Returns {category: [company, ...]} with duplicates removed, skipping empty items."""
+    """Returns {category: [company, ...]} with duplicates removed, skipping empty items.
+
+    NOTE: caller should pass the already-filtered groups (via _filter_groups_for_render)
+    so the names match the body content exactly.
+    """
     result: Dict[str, List[str]] = {}
     for group in grouped_insights:
         if not isinstance(group, dict):
@@ -1088,7 +1148,7 @@ def render_newsletter_pdf(newsletter: Dict[str, Any], out_path: str) -> None:
         rightMargin=0.7 * inch,
         topMargin=1.9 * inch,
         bottomMargin=0.7 * inch,
-        title=str(cover.get("title", "Weekly Housing Finance Intelligence")),
+        title=str(cover.get("title", "Bi-Weekly Housing Finance Intelligence")),
     )
     story = []
 
@@ -1118,7 +1178,7 @@ def render_newsletter_pdf(newsletter: Dict[str, Any], out_path: str) -> None:
 
     # Cover page
     story.append(Spacer(1, 0.9 * inch))
-    story.append(Paragraph(_sanitize(str(cover.get("title", "Housing Finance Weekly Digest"))), styles["TitleStyle"]))
+    story.append(Paragraph(_sanitize(str(cover.get("title", "Housing Finance Bi-Weekly Digest"))), styles["TitleStyle"]))
     story.append(Paragraph(_sanitize(str(cover.get("date_range", "Reporting period not specified"))), styles["CoverMetaStyle"]))
     story.append(Paragraph("Regulatory, Industry & Competitive Intelligence", styles["SubtitleStyle"]))
     story.append(PageBreak())
@@ -1132,8 +1192,13 @@ def render_newsletter_pdf(newsletter: Dict[str, Any], out_path: str) -> None:
     story.append(_separator())
     story.append(Spacer(1, 0.1 * inch))
 
-    # Pre-compute competitor names per sub-section for the index
-    ci_competitor_names = _extract_ci_competitor_names(valid_groups)
+    # Apply the body-render filter (drop CI items with no real narrative) up front,
+    # so the index reflects exactly what the reader will see in the body. Then derive
+    # competitor names for the index sub-cards from this filtered view.
+    renderable_groups = _filter_groups_for_render(valid_groups)
+    ci_competitor_names = _extract_ci_competitor_names(renderable_groups)
+    rendered_ci_sections = {str(g.get("category", "")).strip() for g in renderable_groups}
+    has_any_ci = bool(renderable_groups)
 
     def _index_card(label: str, accent_hex: str, *, width: float = 6.5 * inch,
                     bg: str = "#F7F9FC") -> Table:
@@ -1208,7 +1273,25 @@ def render_newsletter_pdf(newsletter: Dict[str, Any], out_path: str) -> None:
         ]))
         return wrap
 
-    for item in [it for it in NEWSLETTER_INDEX_ITEMS if not _is_empty_value(it)]:
+    # Dynamic-presence checks: skip top-level Index cards for sections that are empty
+    # in this digest, so the Index always reflects the actual body content.
+    has_industry_pulse   = not _is_empty_value(industry_pulse) and (
+        not _is_empty_value(industry_pulse.get("summary_paragraph", ""))
+        or any(not _is_empty_value(h) for h in (industry_pulse.get("highlights") or []))
+    )
+    has_regulatory_watch = bool(valid_regulatory)
+    has_key_takeaways    = bool(valid_takeaways)
+
+    section_present = {
+        "Industry Pulse":          has_industry_pulse,
+        "Regulatory Watch":        has_regulatory_watch,
+        "Competitor Intelligence": has_any_ci,
+        "Key Takeaways":           has_key_takeaways,
+    }
+
+    for item in NEWSLETTER_INDEX_ITEMS:
+        if _is_empty_value(item) or not section_present.get(item, False):
+            continue
         accent = INDEX_SECTION_COLORS.get(item, "#0F2D63")
 
         story.append(_index_card(item, accent))
@@ -1216,21 +1299,23 @@ def render_newsletter_pdf(newsletter: Dict[str, Any], out_path: str) -> None:
 
         if item == "Competitor Intelligence":
             ci_blocks = []
-
+            # Only list CI sub-sections that survived the renderable filter, and
+            # list only the companies that actually appear in the body.
             for sub in NEWSLETTER_INDEX_SUBITEMS.get("Competitor Intelligence", []):
+                if sub not in rendered_ci_sections:
+                    continue
                 sub_color = CI_SUBSECTION_COLORS.get(sub, "#475569")
                 names_for_sub = ci_competitor_names.get(sub, [])
-
                 if names_for_sub:
                     sub_card = _index_card_with_names(sub, sub_color, names_for_sub)
                 else:
                     sub_card = _index_card(sub, sub_color, width=6.15 * inch)
-
                 ci_blocks.append(_indent_flowable(sub_card))
                 ci_blocks.append(Spacer(1, 0.05 * inch))
 
-            story.append(KeepTogether(ci_blocks))
-            story.append(Spacer(1, 0.04 * inch))
+            if ci_blocks:
+                story.append(KeepTogether(ci_blocks))
+                story.append(Spacer(1, 0.04 * inch))
 
     story.append(PageBreak())
 
@@ -1451,7 +1536,7 @@ def render_newsletter_pdf(newsletter: Dict[str, Any], out_path: str) -> None:
     # FIX 2: each competitor item fully in KeepTogether                    #
     # FIX 4: section_key=category for sub-section bg colours               #
     # ------------------------------------------------------------------ #
-    if valid_groups:
+    if renderable_groups:
         _start_section()
         ci_color = INDEX_SECTION_COLORS.get("Competitor Intelligence", "#0F2D63")
         story.append(Paragraph(
@@ -1459,9 +1544,40 @@ def render_newsletter_pdf(newsletter: Dict[str, Any], out_path: str) -> None:
             styles["SectionHeaderStyle"],
         ))
         story.append(_separator())
-        for group in valid_groups:
+        # Use the pre-filtered groups so the heading set and item set match exactly
+        # what the Index advertises. The body loop's own valid_items computation
+        # below is now a defensive no-op (groups are already filtered upstream).
+        for group in renderable_groups:
             category = str(group.get("category", "Category"))
             accent = CI_SUBSECTION_COLORS.get(category)
+
+            valid_items = [
+                item for item in group.get("items", [])
+                if isinstance(item, dict) and not _is_empty_value(item)
+            ]
+
+            # Pre-filter: for non-Operational CI sub-sections, drop items whose
+            # narrative is missing or just a paraphrase of the event. Per review,
+            # an item without a real description shouldn't be rendered at all.
+            # Operational Signals keeps every named item — its event sentence alone
+            # is informative enough.
+            if category != "Operational Signals":
+                kept_items = []
+                for it in valid_items:
+                    ev = _polish_event_text(str(it.get("event", "")))
+                    narr_raw = str(it.get("narrative", "")).strip()
+                    narr = _polish_event_text(narr_raw) if narr_raw else ""
+                    if narr and _is_near_duplicate(ev, narr):
+                        narr = ""
+                    if narr:
+                        kept_items.append(it)
+                valid_items = kept_items
+
+            # If every item got dropped, skip the whole sub-section silently —
+            # don't print the heading with nothing under it.
+            if not valid_items:
+                continue
+
             story.append(CondPageBreak(2.8 * inch))
 
             if accent:
@@ -1474,10 +1590,6 @@ def render_newsletter_pdf(newsletter: Dict[str, Any], out_path: str) -> None:
                     _sanitize(category),
                     styles["SubsectionHeaderStyle"]
                 ))
-            valid_items = [
-                item for item in group.get("items", [])
-                if isinstance(item, dict) and not _is_empty_value(item)
-            ]
             for item_idx, item in enumerate(valid_items):
                 # FIX 1: subtle hairline divider between consecutive boxes
                 # if item_idx > 0:
@@ -1495,17 +1607,21 @@ def render_newsletter_pdf(newsletter: Dict[str, Any], out_path: str) -> None:
                 #     all four CI sub-sections)
                 #   - the body below depends on the sub-section:
                 #
-                # OPERATIONAL SIGNALS: body = event sentence only (~1 line). The event
-                #   already carries the full who / what / when.
+                # OPERATIONAL SIGNALS: body = event sentence only. The event already
+                #   carries the full who / what / when, so a narrative is not required.
                 #
                 # GROWTH & STRATEGY / FUNDING & CAPITAL / RISK & GOVERNANCE:
-                #   body = event + short narrative concatenated, CAPPED AT ~2 LINES
-                #   (~170 chars). The narrative gives a one-clause explanation of the
-                #   strategic angle. Overflow is truncated at the nearest word boundary
-                #   so the box doesn't grow taller than the rest of the section.
+                #   body = event + narrative as flowing prose, no truncation.
+                #   ITEMS WITHOUT A SUBSTANTIVE NARRATIVE ARE SKIPPED ENTIRELY rather
+                #   than rendered as a one-liner — per review, every non-Operational
+                #   CI item must have a real description or be dropped.
                 if category == "Operational Signals":
                     body_text = event or "No source-backed update for this period."
                 else:
+                    if not narrative:
+                        # No real explanation available — don't render a one-liner card.
+                        # The item still lives in the audit DB; it just doesn't make the PDF.
+                        continue
                     body_text = _compose_ci_body(event, narrative)
 
                 item_group: List[Any] = [

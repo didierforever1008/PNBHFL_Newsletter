@@ -183,7 +183,7 @@ def compose_newsletter(
     if not isinstance(cover, dict):
         cover = {}
     cover["date_range"] = date_range
-    cover.setdefault("title", "Housing Finance Weekly Digest")
+    cover.setdefault("title", "Housing Finance Bi-Weekly Digest")
     newsletter["cover"] = cover
     return prompt, newsletter
 
@@ -393,7 +393,7 @@ def transform_markdown_to_newsletter_json(markdown_text: str, date_range: str) -
 
     return {
         "header": {
-            "title": "Housing Finance Weekly Digest",
+            "title": "Housing Finance Bi-Weekly Digest",
             "date_range": date_range,
         },
         "at_a_glance": at_a_glance,
