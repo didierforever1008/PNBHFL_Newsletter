@@ -740,6 +740,136 @@ def _build_operational_summary(name: str, action: str, position: str, eff_date: 
     return summary
 
 
+# ----- PDF enrichment for credit-rating filings -----------------------------------
+# A BSE "Credit Rating" intimation headline almost never contains the actual grade —
+# the agency, instrument, rating and outlook live inside the attached PDF. For
+# Risk/Governance-bucket items whose headline or summary mentions a credit rating, we
+# download the PDF and pull out the structured rating so the newsletter can state the
+# real grade (e.g. "CRISIL reaffirmed the long-term rating at AAA/Stable") instead of a
+# vague "received a credit rating update".
+
+_RATING_FILING_RE = re.compile(
+    r"\bcredit\s+rating\b"
+    r"|\brating\s+(?:action|update|revision|rationale|letter|assigned|reaffirm)"
+    r"|\b(?:re-?affirm|upgrad|downgrad|withdraw)\w*\b.{0,40}\brating\b"
+    r"|\brating\b.{0,40}\b(?:re-?affirm|upgrad|downgrad|withdraw|assign)\w*",
+    re.IGNORECASE,
+)
+
+
+def _is_rating_filing(announcement: Dict[str, Any], summary: str = "") -> bool:
+    """True when a BSE filing looks like a credit-rating action worth enriching."""
+    title = announcement.get("title") or ""
+    return bool(_RATING_FILING_RE.search(title) or _RATING_FILING_RE.search(summary or ""))
+
+
+_RATING_EXTRACT_PROMPT = """You are reading a BSE corporate-announcement PDF in which a
+credit-rating agency has acted on the debt instruments of an Indian housing-finance / NBFC
+company. Extract the headline rating action.
+
+Return JSON ONLY in this exact shape:
+{{
+  "agency": "Rating agency short name, e.g. 'CRISIL', 'ICRA', 'CARE', 'India Ratings'. null if not stated.",
+  "long_term_rating": "Headline long-term rating WITHOUT the agency prefix, e.g. 'AAA', 'AA+'. null if none.",
+  "long_term_outlook": "'Stable' | 'Positive' | 'Negative' | 'Watch' etc. null if none.",
+  "short_term_rating": "Headline short-term rating, e.g. 'A1+'. null if none.",
+  "action": "Dominant action across the filing: one of 'Assigned' | 'Reaffirmed' | 'Upgraded' | 'Downgraded' | 'Withdrawn' | 'Placed on Watch'. null if unclear.",
+  "primary_instrument": "Largest / most relevant instrument, e.g. 'Non-Convertible Debentures', 'Bank Loan Facilities'. null if not stated.",
+  "total_rated_amount": "Total rated amount exactly as written incl. unit, e.g. 'Rs. 1,05,100 crore'. null if not stated."
+}}
+
+Rules:
+- Use the LONG-TERM rating on the LARGEST debt instrument (usually NCDs or bank facilities)
+  as the headline long_term_rating.
+- 'action' is the dominant action. If the filing both reaffirms and assigns, prefer the
+  action on the largest instrument.
+- Preserve the rating notation EXACTLY as written (keep '+'/'-'), but DROP the agency's own
+  name prefix — write 'AAA' not 'Crisil AAA'.
+- Do NOT invent any field. Use null for anything the filing does not state.
+
+Filing text:
+\"\"\"
+{text}
+\"\"\"
+"""
+
+
+def _enrich_rating_from_pdf(llm: Any, announcement: Dict[str, Any]) -> Dict[str, Any]:
+    """Download the attached PDF and extract the structured credit-rating action.
+
+    Returns a dict with keys: agency, long_term_rating, long_term_outlook,
+    short_term_rating, action, primary_instrument, total_rated_amount.
+    Returns {} on any failure (download, extraction, or LLM)."""
+    link = (announcement.get("link") or "").strip()
+    if not link:
+        return {}
+    pdf_bytes = _download_pdf_bytes(link)
+    if not pdf_bytes:
+        return {}
+    text = _extract_pdf_text(pdf_bytes)
+    if not text or len(text) < 80:
+        return {}
+    result = _try_llm_extract(llm, _RATING_EXTRACT_PROMPT.format(text=text[:8000]), "rating")
+    if not isinstance(result, dict):
+        return {}
+    return result
+
+
+def _build_rating_summary(extracted: Dict[str, Any]) -> str:
+    """Compose a clean one-sentence rating summary from the extracted fields.
+
+    Returns "" if no usable rating grade was extracted (caller then keeps the
+    original generic summary). The sentence deliberately does NOT start with the
+    company name (the renderer/composer prepend it) — it starts with the agency.
+    """
+    def _s(key: str) -> str:
+        v = extracted.get(key)
+        return str(v).strip() if v else ""
+
+    agency = _s("agency")
+    lt = _s("long_term_rating")
+    outlook = _s("long_term_outlook")
+    st = _s("short_term_rating")
+    action = _s("action")
+    instrument = _s("primary_instrument")
+    # NOTE: the total rated amount is deliberately NOT surfaced. It is an aggregate the
+    # extractor can easily mis-sum across instruments, so we keep only the agency, the
+    # rating grade(s)/outlook, the action, and the primary instrument — all of which are
+    # stated verbatim in the filing.
+
+    if not (lt or st):
+        return ""
+
+    action_verb = {
+        "Assigned": "assigned",
+        "Reaffirmed": "reaffirmed",
+        "Upgraded": "upgraded",
+        "Downgraded": "downgraded",
+        "Withdrawn": "withdrew",
+        "Placed on Watch": "placed on watch",
+    }.get(action, "rated")
+
+    subject = agency if agency else "The rating agency"
+    lt_phrase = (lt + (f"/{outlook}" if outlook else "")) if lt else ""
+
+    parts = [f"{subject} {action_verb}"]
+    if lt_phrase and st:
+        parts.append(f"the long-term rating at {lt_phrase} and the short-term rating at {st}")
+    elif lt_phrase:
+        parts.append(f"the long-term rating at {lt_phrase}")
+    else:
+        parts.append(f"the short-term rating at {st}")
+    if instrument:
+        parts.append(f"on its {instrument}")
+
+    summary = " ".join(parts).strip()
+    if summary:
+        summary = summary[0].upper() + summary[1:]
+    if summary and summary[-1] not in ".!?":
+        summary += "."
+    return summary
+
+
 # ----- ArticleStore audit helpers -------------------------------------------------
 # Optional integration: when an ArticleStore instance is passed to collect_bse_signals,
 # every BSE filing is persisted into the same DB used by the news pipeline, with the
@@ -976,7 +1106,27 @@ def collect_bse_signals(
                                  })
                 continue  # operational items handled — don't fall through to the generic append below
 
-            # Non-operational items (Funding / Risk / Growth / Rumour) pass through unchanged.
+            # Credit-rating filings: the headline only says "received a credit rating
+            # update" — the actual grade lives in the attached PDF. Read it and rewrite
+            # the summary to state the real rating. On any failure we keep the original
+            # summary (the item is NOT dropped — a generic rating note is still useful).
+            if _is_rating_filing(r, r.get("summary", "")):
+                extracted = _enrich_rating_from_pdf(llm, r)
+                rating_summary = _build_rating_summary(extracted) if extracted else ""
+                _safe_record(store, url=(r.get("link") or "").strip(),
+                             stage="bse_rating_enrichment",
+                             payload={
+                                 "success":   bool(rating_summary),
+                                 "extracted": extracted,
+                                 "summary":   rating_summary,
+                             })
+                if rating_summary:
+                    r = {**r, "summary": rating_summary}
+                    logger.info(
+                        "bse: rating enrichment for %s — %s", company, rating_summary,
+                    )
+
+            # Non-operational items (Funding / Risk / Growth / Rumour) pass through.
             gated.append(r)
 
         # Brevity cap: at most 2 line items per competitor in the newsletter.
