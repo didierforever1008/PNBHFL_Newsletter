@@ -1,12 +1,21 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from typing import Dict, List
 
 import requests
 
 logger = logging.getLogger(__name__)
+
+# Transient network errors we retry-with-backoff before giving up on a single fetch.
+_TRANSIENT_NET_EXCEPTIONS = (
+    requests.exceptions.ReadTimeout,
+    requests.exceptions.ConnectTimeout,
+    requests.exceptions.ConnectionError,
+    requests.exceptions.ChunkedEncodingError,
+)
 
 
 @dataclass
@@ -53,7 +62,34 @@ class NewsAPIClient:
             "apiKey": self.api_key,
         }
         url = "https://newsapi.org/v2/everything"
-        response = requests.get(url, params=params, timeout=self.timeout_seconds)
+
+        # Retry transient network errors (ReadTimeout / ConnectionError) with exponential
+        # backoff before giving up on this single company's fetch. NewsAPI occasionally
+        # takes >30 s to respond when their backend is under load; one slow request must
+        # not abort the whole pipeline.
+        response = None
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            try:
+                response = requests.get(url, params=params, timeout=self.timeout_seconds)
+                break
+            except _TRANSIENT_NET_EXCEPTIONS as exc:
+                if attempt == max_attempts:
+                    logger.warning(
+                        "NewsAPI network error for '%s' after %s attempts (%s) — returning [] for this fetch. "
+                        "Pipeline continues with other sources.",
+                        company, max_attempts, type(exc).__name__,
+                    )
+                    return []
+                backoff = 2 ** (attempt - 1)
+                logger.info(
+                    "NewsAPI %s on attempt %s/%s for '%s'; retrying in %ss.",
+                    type(exc).__name__, attempt, max_attempts, company, backoff,
+                )
+                time.sleep(backoff)
+        if response is None:
+            return []
+
         if response.status_code == 429:
             # Developer-plan quota is 100 requests / 24 hours. When we've burned through
             # the daily budget, NewsAPI hard-rejects every request until the rolling
@@ -109,11 +145,22 @@ def articles_to_prompt_block(articles: List[NewsArticle], limit: int = 30) -> st
 def collect_articles_for_competitors(client: NewsAPIClient, competitor_map: Dict[str, List[str]], from_date: str, to_date: str, per_company_limit: int = 15) -> Dict[str, List[NewsArticle]]:
     output: Dict[str, List[NewsArticle]] = {}
     for company, aliases in competitor_map.items():
-        output[company] = client.fetch_company_articles(
-            company=company,
-            aliases=aliases,
-            from_date=from_date,
-            to_date=to_date,
-            max_articles=per_company_limit,
-        )
+        try:
+            output[company] = client.fetch_company_articles(
+                company=company,
+                aliases=aliases,
+                from_date=from_date,
+                to_date=to_date,
+                max_articles=per_company_limit,
+            )
+        except Exception as exc:  # noqa: BLE001
+            # Last-resort safety net: an unexpected per-company failure must not abort
+            # the full pipeline. fetch_company_articles already retries transient
+            # network errors and handles 429 gracefully; anything reaching this clause
+            # is genuinely unexpected.
+            logger.warning(
+                "NewsAPI fetch raised unexpectedly for '%s' (%s: %s) — returning [] and continuing.",
+                company, type(exc).__name__, str(exc)[:200],
+            )
+            output[company] = []
     return output

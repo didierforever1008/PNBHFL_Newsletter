@@ -154,6 +154,14 @@ def _call_bse_api(scrip_code: str, start: date, end: date) -> List[Dict[str, Any
                 logger.warning("bse: non-JSON response for scrip %s; first 200 chars: %s",
                                scrip_code, r.text[:200])
                 return []
+            # BSE returns the JSON-encoded string "No Record Found!" (and similar sentinels)
+            # when a query yields zero announcements OR when the API is throttling. Treat any
+            # non-dict response as "no rows" rather than letting it propagate as an
+            # AttributeError that aborts the run.
+            if not isinstance(data, dict):
+                logger.info("bse: empty response for scrip %s (%r) — treating as 0 rows.",
+                            scrip_code, str(data)[:80])
+                return []
             rows = data.get("Table") or []
             if not isinstance(rows, list):
                 return []
