@@ -26,6 +26,23 @@ COMPETITOR_ALIASES: Dict[str, List[str]] = {
 
 # Screener.in tickers — kept for reference; the active source for announcements is
 # now BSE (see BSE_SECURITY_CODES below).
+#
+# IMPORTANT: subsidiary-vs-parent policy
+# --------------------------------------
+# Four of our tracked housing-finance competitors are WHOLLY-OWNED, UNLISTED subsidiaries
+# of a listed parent. Earlier we tracked the parent's ticker as a fallback, which caused
+# the newsletter to surface parent-level filings (parent's NCD allotments, parent's
+# results) under the subsidiary's name. That mixed signal was confusing, so we DO NOT
+# track these via Screener / BSE any more. News / RSS / policy-feed coverage of the
+# subsidiary continues unchanged, since news outlets routinely report on the subsidiary
+# by name even though it has no separate BSE filing footprint.
+#
+#   Aditya Birla Housing Finance — parent Aditya Birla Capital (ABCAPITAL)
+#   L&T Finance Housing          — parent L&T Finance Ltd (LTF)
+#   Tata Capital Housing Finance — parent Tata Capital (TATACAP, IPO Oct 2025)
+#   Shriram Housing Finance      — former parent Shriram Finance (SHRIRAMFIN); the
+#                                  subsidiary was sold to Warburg Pincus in 2023 and
+#                                  rebranded to Truhome Finance.
 SCREENER_TICKERS: Dict[str, str] = {
     "HDFC Ltd":                     "HDFCBANK",     # merged into HDFC Bank in 2023
     "LIC Housing Finance":          "LICHSGFIN",
@@ -34,30 +51,33 @@ SCREENER_TICKERS: Dict[str, str] = {
     "Aavas Financiers":             "AAVAS",
     "Home First Finance":           "HOMEFIRST",
     "Repco Home Finance":           "REPCOHOME",
-    "Tata Capital Housing Finance": "TATACAP",     # parent Tata Capital (IPO Oct 2025)
-    "Bajaj Finserv Home Loans":     "BAJAJHFL",    # = Bajaj Housing Finance
-    "Shriram Housing Finance":      "SHRIRAMFIN",  # parent
-    "L&T Finance Housing":          "LTF",         # parent
-    "Aditya Birla Housing Finance": "ABCAPITAL",   # parent (Aditya Birla Capital)
+    "Tata Capital Housing Finance": "",            # subsidiary unlisted; parent excluded
+    "Bajaj Finserv Home Loans":     "BAJAJHFL",    # = Bajaj Housing Finance (listed separately)
+    "Shriram Housing Finance":      "",            # sold to Warburg Pincus / Truhome Finance
+    "L&T Finance Housing":          "",            # subsidiary unlisted; parent excluded
+    "Aditya Birla Housing Finance": "",            # subsidiary unlisted; parent excluded
     "Cholamandalam Investment":     "CHOLAFIN",
 }
 
 # BSE security codes (6-digit scrip numbers). These power the corp-announcements
 # pull at https://api.bseindia.com/BseIndiaAPI/api/AnnGetData/w. Auto-discovered
 # from Screener.in pages; verify if any company changes parent/listing.
+# Empty string => the competitor has no separately-listed BSE entity (the housing
+# subsidiary is wholly owned by an unlisted/listed parent). The BSE pipeline
+# skips empty scrips and the newsletter falls back to news/RSS coverage.
 BSE_SECURITY_CODES: Dict[str, str] = {
     "HDFC Ltd":                     "500180",   # tracks HDFC Bank post-2023 merger
     "LIC Housing Finance":          "500253",
-    "Indiabulls Housing Finance":   "535789",   # Sammaan Capital
+    "Indiabulls Housing Finance":   "535789",   # Sammaan Capital (renamed in 2024)
     "Can Fin Homes":                "511196",
     "Aavas Financiers":             "541988",
     "Home First Finance":           "543259",
     "Repco Home Finance":           "535322",
-    "Tata Capital Housing Finance": "544574",   # Tata Capital parent
-    "Bajaj Finserv Home Loans":     "544252",   # = Bajaj Housing Finance
-    "Shriram Housing Finance":      "511218",   # parent Shriram Finance
-    "L&T Finance Housing":          "533519",   # parent L&T Finance
-    "Aditya Birla Housing Finance": "540691",   # parent Aditya Birla Capital
+    "Tata Capital Housing Finance": "",         # subsidiary unlisted; parent Tata Capital (544574) excluded
+    "Bajaj Finserv Home Loans":     "544252",   # = Bajaj Housing Finance (listed separately)
+    "Shriram Housing Finance":      "",         # sold to Warburg Pincus / Truhome Finance; former parent (511218) excluded
+    "L&T Finance Housing":          "",         # subsidiary unlisted; parent L&T Finance (533519) excluded
+    "Aditya Birla Housing Finance": "",         # subsidiary unlisted; parent Aditya Birla Capital (540691) excluded
     "Cholamandalam Investment":     "511243",
 }
 
