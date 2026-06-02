@@ -870,6 +870,91 @@ def _build_rating_summary(extracted: Dict[str, Any]) -> str:
     return summary
 
 
+# ----- Generic PDF facts enrichment -----------------------------------------------
+# For BSE filings that are NOT management changes and NOT credit ratings, the headline
+# is usually a one-line gist ("...allotment of Non-Convertible Debentures") and all the
+# specific facts (issue size, count of securities, ISIN, coupon, allotment date, etc.)
+# live inside the attached PDF. This generic enrichment reads the PDF and pulls those
+# structured facts so the newsletter event can state real numbers instead of just the
+# headline. Designed for Funding & Capital and Risk/Governance/Growth/Strategy filings.
+
+_PDF_FACTS_EXTRACT_PROMPT = """You are reading a BSE corporate-announcement PDF filed by an
+Indian housing-finance / NBFC company. Extract ONLY the specific facts the filing actually
+states, then write ONE richer summary sentence that incorporates them.
+
+Return JSON ONLY in this exact shape:
+{{
+  "facts": {{
+    "instrument": "What was issued / approved / done — e.g. 'Secured Redeemable Non-Convertible Debentures', 'Commercial Paper', 'Equity Shares (Preferential Allotment)', 'Bank Loan Facilities'. null if not applicable.",
+    "amount_value": "Numeric amount written verbatim, e.g. '2,950', '4,000', '50,000'. null if not stated.",
+    "amount_unit": "'crore' | 'lakh' | 'million' | 'billion'. null if not stated.",
+    "currency": "'Rs.' for INR, 'USD', 'EUR' etc. Default to 'Rs.' when rupee symbol or 'Rs.' appears in text. null if not applicable.",
+    "count": "Number of securities / shares allotted, exactly as written, e.g. '2,95,000', '31,700', '13,16,960'. null if not applicable.",
+    "face_value": "Face value per security if stated, e.g. 'Rs. 1,00,000', 'Rs. 10'. null if not stated.",
+    "tenor": "Tenor if stated, e.g. '3 years', '90 days'. null if not stated.",
+    "coupon_or_yield": "Coupon rate or yield if stated, e.g. '8.25% p.a.', '3M T-Bill + 210 bps'. null if not stated.",
+    "event_date": "YYYY-MM-DD — the date the allotment / issuance / approval took effect. Distinct from the filing date. null if not stated.",
+    "isin": "ISIN code if stated, e.g. 'INE976I07DE9'. null if not stated.",
+    "counterparty": "Counterparty / investor name for private placements to a named party, M&A targets, JV partners. null otherwise."
+  }},
+  "summary": "ONE complete factual sentence (max ~30 words) incorporating amount, currency, instrument, count, and date when stated. Start with a verb or noun phrase. Do NOT start with the company name (the renderer prepends it). Do NOT use ellipses."
+}}
+
+Rules:
+- Use JSON null for any field the filing does not state. Do NOT invent, estimate, or guess.
+- Preserve currency + amount exactly as written. If filing says 'Rs.2,950 crore', emit
+  amount_value='2,950', amount_unit='crore', currency='Rs.'.
+- The 'summary' is what will appear in the newsletter. It MUST include the currency + amount
+  + instrument when the filing states them. Example for an NCD allotment:
+    Bad:  'Allotted non-convertible debentures.'
+    Good: 'Allotted 2,95,000 secured redeemable NCDs aggregating Rs. 2,950 crore on 2026-05-21 (ISIN INE976I07DE9).'
+
+Filing text:
+\"\"\"
+{text}
+\"\"\"
+"""
+
+
+def _enrich_facts_from_pdf(llm: Any, announcement: Dict[str, Any]) -> Dict[str, Any]:
+    """Download the attached PDF and extract structured facts + an enriched summary.
+
+    Returns a dict with two keys: 'facts' (the structured fields) and 'summary'
+    (the rewritten one-sentence summary). Returns {} on any failure.
+    """
+    link = (announcement.get("link") or "").strip()
+    if not link:
+        return {}
+    pdf_bytes = _download_pdf_bytes(link)
+    if not pdf_bytes:
+        return {}
+    text = _extract_pdf_text(pdf_bytes)
+    if not text or len(text) < 80:
+        return {}
+    result = _try_llm_extract(llm, _PDF_FACTS_EXTRACT_PROMPT.format(text=text[:8000]), "facts")
+    if not isinstance(result, dict):
+        return {}
+    return result
+
+
+def _facts_are_substantive(extracted: Dict[str, Any]) -> bool:
+    """True when the extraction yielded at least one concrete fact AND a usable summary.
+
+    Guards against accepting an LLM rewrite that is no more informative than the original
+    headline — the new summary must carry at least one quantitative or date anchor.
+    """
+    facts = extracted.get("facts") or {}
+    if not isinstance(facts, dict):
+        return False
+    summary = (extracted.get("summary") or "").strip()
+    if len(summary) < 20:
+        return False
+    # At least one of: amount, count, event_date, ISIN, coupon, tenor, counterparty
+    anchors = ("amount_value", "count", "event_date", "isin", "coupon_or_yield", "tenor", "counterparty")
+    return any((facts.get(k) or "").strip() if isinstance(facts.get(k), str) else bool(facts.get(k))
+               for k in anchors)
+
+
 # ----- ArticleStore audit helpers -------------------------------------------------
 # Optional integration: when an ArticleStore instance is passed to collect_bse_signals,
 # every BSE filing is persisted into the same DB used by the news pipeline, with the
@@ -1125,6 +1210,27 @@ def collect_bse_signals(
                     logger.info(
                         "bse: rating enrichment for %s — %s", company, rating_summary,
                     )
+            else:
+                # Generic PDF facts enrichment for every other non-operational filing
+                # that has a PDF attachment (Funding/Capital, Risk/Governance, Growth,
+                # Strategy). Read the PDF and replace the headline-derived summary with
+                # one that actually states the issue size, count, ISIN, coupon, date.
+                if (r.get("link") or "").strip():
+                    facts_out = _enrich_facts_from_pdf(llm, r)
+                    facts_summary = (facts_out.get("summary") or "").strip() if facts_out else ""
+                    is_substantive = _facts_are_substantive(facts_out) if facts_out else False
+                    _safe_record(store, url=(r.get("link") or "").strip(),
+                                 stage="bse_facts_enrichment",
+                                 payload={
+                                     "success":   is_substantive,
+                                     "extracted": facts_out,
+                                     "summary":   facts_summary,
+                                 })
+                    if is_substantive and facts_summary:
+                        r = {**r, "summary": facts_summary}
+                        logger.info(
+                            "bse: facts enrichment for %s — %s", company, facts_summary,
+                        )
 
             # Non-operational items (Funding / Risk / Growth / Rumour) pass through.
             gated.append(r)
