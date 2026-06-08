@@ -55,6 +55,9 @@ import requests
 logger = logging.getLogger(__name__)
 
 BSE_API_URL = "https://api.bseindia.com/BseIndiaAPI/api/AnnGetData/w"
+# NSE corporate-announcements endpoint (active source as of Jun 2026; BSE blocked external HTTP)
+NSE_API_URL = "https://www.nseindia.com/api/corporate-announcements"
+NSE_REFERER = "https://www.nseindia.com/companies-listing/corporate-filings-announcements"
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -207,6 +210,136 @@ def fetch_announcements_in_range(
     logger.info(
         "bse: %s (scrip %s) - %s total returned, %s in [%s..%s]",
         company_name, scrip_code, len(rows), len(in_range),
+        s.isoformat(), e.isoformat(),
+    )
+    return in_range
+
+
+# ----- NSE fetch + parse ----------------------------------------------------------
+# As of Jun 2026, BSE's announcement endpoint either silently empties ("No Record Found!")
+# or returns a 302 to /error_Bse.html for external HTTP clients. NSE's equivalent endpoint
+# remains open and returns full corporate-filings data with the same field semantics, so
+# we fetch from NSE and normalize to the same internal shape downstream consumers expect.
+
+
+def _call_nse_api(symbol: str, start: date, end: date) -> List[Dict[str, Any]]:
+    """Single GET against the NSE corporate-announcements endpoint.
+
+    Returns the JSON-decoded list (NSE returns a top-level array of announcements). On any
+    non-JSON / non-2xx response, returns [] so the caller can degrade gracefully.
+    """
+    headers = {
+        "User-Agent":      USER_AGENT,
+        "Accept":          "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer":         NSE_REFERER,
+        "Sec-Fetch-Site":  "same-origin",
+        "Sec-Fetch-Mode":  "cors",
+        "Sec-Fetch-Dest":  "empty",
+    }
+    params = {
+        "index":     "equities",
+        "symbol":    symbol,
+        # NSE expects dd-mm-yyyy on this endpoint.
+        "from_date": start.strftime("%d-%m-%Y"),
+        "to_date":   end.strftime("%d-%m-%Y"),
+    }
+
+    for attempt in range(3):
+        try:
+            r = requests.get(NSE_API_URL, params=params, headers=headers, timeout=REQUEST_TIMEOUT)
+            if 500 <= r.status_code < 600:
+                time.sleep(1.5 * (2 ** attempt))
+                continue
+            if r.status_code != 200:
+                logger.warning(
+                    "nse: HTTP %s for symbol %s (%s..%s); body: %s",
+                    r.status_code, symbol, params["from_date"], params["to_date"],
+                    r.text[:200],
+                )
+                return []
+            try:
+                data = r.json()
+            except ValueError:
+                logger.warning("nse: non-JSON response for symbol %s; first 200 chars: %s",
+                               symbol, r.text[:200])
+                return []
+            # NSE returns a top-level JSON array. Defensive: tolerate dict-wrapped shapes
+            # too, in case the API surface evolves.
+            if isinstance(data, dict):
+                data = data.get("data") or data.get("rows") or []
+            if not isinstance(data, list):
+                logger.info("nse: unexpected response for symbol %s (%r) - treating as 0 rows.",
+                            symbol, str(data)[:80])
+                return []
+            return data
+        except requests.RequestException as e:
+            logger.warning("nse: request failed for %s (attempt %s/3): %s",
+                           symbol, attempt + 1, e)
+            time.sleep(1.5 * (2 ** attempt))
+    return []
+
+
+def _nse_row_to_announcement(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize one NSE API row to our internal shape.
+
+    NSE returns:
+      an_dt / sort_date    -> the publication timestamp
+      desc                 -> short category (e.g. 'Appointment', 'Dividend', 'Outcome of
+                              Board Meeting'). Used as the bse_category equivalent so the
+                              downstream classifier prompt sees a category hint.
+      attchmntText         -> the full filing headline
+      attchmntFile         -> PDF URL (https://nsearchives.nseindia.com/corporate/...)
+    """
+    title = (row.get("attchmntText") or row.get("desc") or "").strip()
+    # Prefer the explicit sort_date (ISO format) where available; fall back to an_dt parsing.
+    sort_date = (row.get("sort_date") or "").strip()
+    d = None
+    if sort_date:
+        try:
+            d = datetime.fromisoformat(sort_date).date()
+        except ValueError:
+            d = None
+    if d is None:
+        d = _parse_bse_datetime(row.get("an_dt") or row.get("exchdisstime") or "")
+    link = (row.get("attchmntFile") or "").strip()
+    return {
+        "title": title,
+        "date":  d,
+        "link":  link,
+        # Reuse the bse_category key so the classifier prompt and downstream code don't
+        # have to learn an exchange-specific field name. The NSE 'desc' values are the
+        # NSE equivalent of BSE CATEGORYNAME ('Appointment', 'Dividend', 'Outcome of
+        # Board Meeting', 'Resignation', 'Press Release', 'Investor Presentation', etc.).
+        "bse_category": (row.get("desc") or "").strip(),
+    }
+
+
+def fetch_nse_announcements_in_range(
+    company_name: str,
+    nse_symbol: str,
+    start: date,
+    end: date,
+) -> List[Dict[str, Any]]:
+    """Fetch from NSE and return announcements STRICTLY inside [start, end].
+
+    Drop-in replacement for fetch_announcements_in_range when an NSE symbol is available
+    for the company. Returns the same dict shape so the rest of the pipeline
+    (classifier, gate, PDF enrichment, audit writes) is exchange-agnostic.
+    """
+    s = _coerce_date(start)
+    e = _coerce_date(end)
+    rows = _call_nse_api(nse_symbol, s, e)
+
+    in_range: List[Dict[str, Any]] = []
+    for row in rows:
+        ann = _nse_row_to_announcement(row)
+        if ann["date"] and s <= ann["date"] <= e and ann["title"]:
+            in_range.append(ann)
+
+    logger.info(
+        "nse: %s (symbol %s) - %s total returned, %s in [%s..%s]",
+        company_name, nse_symbol, len(rows), len(in_range),
         s.isoformat(), e.isoformat(),
     )
     return in_range
@@ -712,9 +845,21 @@ def _normalize_action(raw: str) -> str:
     return mapping.get(s, "")
 
 
-def _build_operational_summary(name: str, action: str, position: str, eff_date: str, reason: str = "") -> str:
-    """Build a clean one-sentence Operational Signals summary. All three core inputs
-    (name, action, eff_date) must already be validated. Returns "" if anything is missing.
+def _build_operational_summary(
+    name: str,
+    action: str,
+    position: str,
+    eff_date: str,
+    reason: str = "",
+    date_phrasing: str = "effective",
+) -> str:
+    """Build a clean one-sentence Operational Signals summary.
+
+    name + action + eff_date are all required (eff_date may be a filing-date proxy
+    when the extracted effective_date was empty — the caller signals this by passing
+    date_phrasing="announced per filing on" instead of the default "effective", so the
+    reader knows the date is the announcement date rather than the operative date).
+    Returns "" if anything is missing.
     """
     if not (name and action and eff_date):
         return ""
@@ -739,7 +884,7 @@ def _build_operational_summary(name: str, action: str, position: str, eff_date: 
         parts.append(f"{name} passed away")
         if position:
             parts.append(f"while serving as {position}")
-    parts.append(f"effective {eff_date}")
+    parts.append(f"{date_phrasing} {eff_date}")
     if reason and len(reason) <= 80:
         parts.append(f"— {reason}")
     summary = " ".join(parts).strip()
@@ -1027,8 +1172,10 @@ def collect_bse_signals(
     end: date,
     inter_company_sleep_seconds: float = 0.6,
     store: Any = None,
+    nse_symbols: Optional[Dict[str, str]] = None,
+    screener_tickers: Optional[Dict[str, str]] = None,
 ) -> List[Dict[str, Any]]:
-    """Run the full BSE pipeline and return rows for `competitor_rows`.
+    """Run the full exchange-announcements pipeline and return rows for `competitor_rows`.
 
     Each returned dict has the shape:
         {"company": <name>, "weekly_summary": <text>, "signal_types": [<routing tag>]}
@@ -1039,7 +1186,23 @@ def collect_bse_signals(
       ["risk"|"governance"|"asset_quality"] -> Risk & Governance
       ["growth"|"strategy"]              -> Growth & Strategy (default)
 
-    Companies without a BSE security code mapping are skipped with a log line.
+    Source selection per company (Jun 2026):
+      1. If `nse_symbols` is provided AND the company has a non-empty NSE symbol -> NSE.
+      2. Else if the company has a non-empty BSE scrip -> BSE.
+      3. Else skip with a log line.
+
+      If `screener_tickers` is also provided AND the company has a non-empty Screener
+      ticker, Screener is scraped as a SUPPLEMENTARY source and merged on top of the
+      primary fetch (NSE or BSE). Duplicates are removed by (date, normalized-title).
+      Screener mirrors BSE filings with BSE PDF links, so it serves as both a backup
+      (when NSE has a gap) and a cross-verification (Screener often presents richer
+      one-sentence summaries than the raw NSE attchmntText / BSE HEADLINE).
+
+    BSE has historically been the primary source; as of Jun 2026 its announcement
+    endpoint silently empties / redirects for external HTTP clients, so the call site
+    in app.py now passes nse_symbols and NSE is the active path. BSE remains as a
+    fallback if NSE access is interrupted.
+
     Network/LLM failures are caught per-company so one bad scrip doesn't poison the run.
     """
     s = _coerce_date(start)
@@ -1063,17 +1226,62 @@ def collect_bse_signals(
         "Growth": "Growth & Strategy", "Strategy": "Growth & Strategy",
     }
 
+    nse_map = nse_symbols or {}
+    screener_map = screener_tickers or {}
+
+    def _normalize_title(t: str) -> str:
+        """Lowercase + collapse whitespace, for dedupe across NSE/BSE/Screener mirrors."""
+        return re.sub(r"\s+", " ", (t or "").lower().strip())
+
     for company in competitors:
-        scrip = (bse_codes.get(company) or "").strip()
-        if not scrip:
-            logger.info("bse: skipping %s (no BSE security code mapped)", company)
+        nse_symbol = (nse_map.get(company) or "").strip()
+        bse_scrip = (bse_codes.get(company) or "").strip()
+        screener_ticker = (screener_map.get(company) or "").strip()
+
+        # Primary fetch: prefer NSE; fall back to BSE only if no NSE symbol is mapped.
+        anns: List[Dict[str, Any]] = []
+        if nse_symbol:
+            try:
+                anns = fetch_nse_announcements_in_range(company, nse_symbol, s, e)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("nse: fetch raised for %s (symbol %s): %s", company, nse_symbol, exc)
+                anns = []
+        elif bse_scrip:
+            try:
+                anns = fetch_announcements_in_range(company, bse_scrip, s, e)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("bse: fetch raised for %s (scrip %s): %s", company, bse_scrip, exc)
+                anns = []
+        elif not screener_ticker:
+            logger.info("announcements: skipping %s (no NSE/BSE/Screener mapping)", company)
             continue
 
-        try:
-            anns = fetch_announcements_in_range(company, scrip, s, e)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("bse: fetch raised for %s (scrip %s): %s", company, scrip, exc)
-            anns = []
+        # Supplementary fetch: Screener. Merge by (date, normalized-title) dedupe so a
+        # filing surfaced by both NSE and Screener appears once. Items unique to Screener
+        # (or with richer Screener-generated summaries) are kept.
+        if screener_ticker:
+            try:
+                from services.screener_announcements import fetch_announcements_in_range as _fetch_screener
+                screener_anns = _fetch_screener(company, screener_ticker, s, e)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("screener: fetch raised for %s (ticker %s): %s",
+                               company, screener_ticker, exc)
+                screener_anns = []
+            if screener_anns:
+                seen = {(a.get("date"), _normalize_title(a.get("title", ""))) for a in anns}
+                added = 0
+                for sa in screener_anns:
+                    key = (sa.get("date"), _normalize_title(sa.get("title", "")))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    anns.append(sa)
+                    added += 1
+                if added:
+                    logger.info(
+                        "screener: %s — added %s unique item(s) on top of %s primary; total now %s",
+                        company, added, len(anns) - added, len(anns),
+                    )
 
         time.sleep(inter_company_sleep_seconds)
 
@@ -1156,6 +1364,16 @@ def collect_bse_signals(
                         })
 
                 # Now run each candidate through the named-individual / action / date gate.
+                # Gate semantics:
+                #   - person_name + action MUST be present (these are the irreducibles)
+                #   - effective_date is PREFERRED but optional. If missing, fall back to the
+                #     filing date (a reasonable proxy: routine appointments like Internal
+                #     Auditor are typically effective from the board meeting date, which IS
+                #     the filing date). The summary is phrased "Announced" vs "Effective"
+                #     so the reader knows the date is a filing-date proxy, not an extracted
+                #     effective date.
+                filing_date = r.get("date")
+                filing_date_iso = filing_date.isoformat() if hasattr(filing_date, "isoformat") else (filing_date or "")
                 kept_any_for_this_filing = False
                 for cand in candidates:
                     name   = cand["person_name"]
@@ -1164,11 +1382,22 @@ def collect_bse_signals(
                     if not (
                         _looks_like_personal_name(name)
                         and action in _VALID_OPERATIONAL_ACTIONS
-                        and edate
                     ):
                         continue
+
+                    date_for_summary = edate
+                    date_phrasing = "effective"
+                    if not date_for_summary and filing_date_iso:
+                        date_for_summary = filing_date_iso
+                        date_phrasing = "announced per filing on"
+
+                    if not date_for_summary:
+                        # Truly no date anywhere — keep dropping.
+                        continue
+
                     rebuilt = _build_operational_summary(
-                        name, action, cand["position"], edate, cand["reason"],
+                        name, action, cand["position"], date_for_summary, cand["reason"],
+                        date_phrasing=date_phrasing,
                     )
                     if not rebuilt:
                         continue
@@ -1176,13 +1405,14 @@ def collect_bse_signals(
                         **r,
                         "person_name": name,
                         "action":      action,
-                        "event_date":  edate,
+                        "event_date":  date_for_summary,
                         "summary":     rebuilt,
                     })
                     kept_any_for_this_filing = True
                     logger.info(
-                        "bse: operational item kept for %s — %s (%s, %s).",
-                        company, name, action, edate,
+                        "bse: operational item kept for %s — %s (%s, %s%s).",
+                        company, name, action, date_for_summary,
+                        " — filing-date proxy" if not edate else "",
                     )
 
                 if not kept_any_for_this_filing:

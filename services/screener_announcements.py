@@ -35,10 +35,13 @@ USER_AGENT = "HousingFinanceDigestBot/1.0 (research; contact: pnb-hfc@example.co
 REQUEST_TIMEOUT = 30
 
 # === Screener selectors — patch here if the site changes its HTML =================
+# Screener restructured the announcements panel in 2025; the old li.document selectors
+# no longer match. Items now sit inside <section id="documents"> -> <div class="show-more-box">
+# -> <a href="https://www.bseindia.com/stockinfo/AnnPdfOpen.aspx?Pname=...">. The link text
+# bundles "<BSE-category-prefix><DD MMM> - <summary excerpt>" — date is parsed from this
+# concatenation; year is inferred from the [start, end] window passed by the caller.
 ANNOUNCEMENTS_SECTION_ID = "documents"
-ANNOUNCEMENT_ROW_SELECTOR = "li.document, li.announcement"
-ANNOUNCEMENT_TITLE_SELECTOR = "a"
-ANNOUNCEMENT_DATE_SELECTOR = "div.ink-700, div.sub, span.ink-700, .ink-600"
+ANNOUNCEMENT_ROW_SELECTOR = "section#documents .show-more-box a, section#documents .documents a"
 # ==================================================================================
 
 _RELEVANT_CATEGORIES = {"Hiring", "Management Change", "Rumour"}
@@ -98,25 +101,80 @@ def _fetch_company_page(ticker: str) -> Optional[str]:
     return None
 
 
-def _parse_announcements(html: str, base_url: str) -> List[Dict[str, Any]]:
-    """Return a list of {title, date, link}. Pure function — easy to test."""
+_LINK_DATE_PATTERN = re.compile(r"(?P<day>\d{1,2})\s+(?P<mon>[A-Za-z]{3,9})", re.IGNORECASE)
+
+
+def _split_screener_link_text(text: str, window_start: date, window_end: date) -> Dict[str, Any]:
+    """Parse a Screener announcement <a> text into {bse_category, title, date}.
+
+    Format observed Jun 2026: "<BSE-category-prefix><DD MMM> - <summary excerpt>"
+    e.g. "Announcement under Regulation 30 (LODR)-Change in Management13 May - Shri Sandee..."
+
+    The "DD MMM" is the BSE filing date; year is inferred from the [window_start, window_end]
+    bounds passed in (Screener only shows the most recent ~40 items so the year is
+    unambiguous in practice).
+    """
+    raw = (text or "").strip()
+    match = _LINK_DATE_PATTERN.search(raw)
+    if not match:
+        return {"bse_category": raw, "title": raw, "date": None}
+
+    day = match.group("day")
+    mon = match.group("mon")
+    bse_category = raw[: match.start()].strip(" -:\t")
+    summary = raw[match.end():].strip(" -:\t")
+
+    # Infer year. Try each year in the [start.year .. end.year] range and pick the first
+    # parseable, in-window date.
+    parsed_date: Optional[date] = None
+    candidates = sorted({window_start.year, window_end.year, date.today().year})
+    for year in candidates:
+        for fmt in ("%d %b %Y", "%d %B %Y"):
+            try:
+                candidate = datetime.strptime(f"{day} {mon} {year}", fmt).date()
+            except ValueError:
+                continue
+            # Prefer a candidate inside [start, end]; otherwise fall back to closest.
+            if window_start <= candidate <= window_end:
+                parsed_date = candidate
+                break
+        if parsed_date:
+            break
+    if parsed_date is None:
+        # Fall back to start.year so the caller at least has SOMETHING to inspect.
+        for fmt in ("%d %b %Y", "%d %B %Y"):
+            try:
+                parsed_date = datetime.strptime(f"{day} {mon} {window_start.year}", fmt).date()
+                break
+            except ValueError:
+                continue
+
+    headline = summary or bse_category or raw
+    return {"bse_category": bse_category or "", "title": headline, "date": parsed_date}
+
+
+def _parse_announcements(html: str, base_url: str, window_start: date, window_end: date) -> List[Dict[str, Any]]:
+    """Return a list of {title, date, link, bse_category}. Pure function — easy to test."""
     soup = BeautifulSoup(html, "lxml")
     panel = soup.find(id=ANNOUNCEMENTS_SECTION_ID) or soup
-    rows = panel.select(ANNOUNCEMENT_ROW_SELECTOR)
+    anchors = panel.select(ANNOUNCEMENT_ROW_SELECTOR)
     out: List[Dict[str, Any]] = []
-    for row in rows:
-        a = row.select_one(ANNOUNCEMENT_TITLE_SELECTOR)
-        if not a:
-            continue
-        title = a.get_text(" ", strip=True)
+    for a in anchors:
         href = a.get("href") or ""
-        if not title:
+        # Skip the "All" link that points to the BSE corp-filing landing page.
+        if not href or href.endswith(("/500", "/500/")):
+            continue
+        text = a.get_text(" ", strip=True)
+        if not text or len(text) < 8:
             continue
         link = urljoin(base_url, href) if href else ""
-        date_el = row.select_one(ANNOUNCEMENT_DATE_SELECTOR)
-        date_text = date_el.get_text(" ", strip=True) if date_el else ""
-        d = _parse_screener_date(date_text) or _parse_screener_date(title)
-        out.append({"title": title, "date": d, "link": link})
+        parsed = _split_screener_link_text(text, window_start, window_end)
+        out.append({
+            "title":        parsed["title"],
+            "date":         parsed["date"],
+            "link":         link,
+            "bse_category": parsed["bse_category"],
+        })
     return out
 
 
@@ -126,7 +184,11 @@ def fetch_announcements_in_range(
     start: date,
     end: date,
 ) -> List[Dict[str, Any]]:
-    """Scrape Screener and return announcements with date STRICTLY in [start, end]."""
+    """Scrape Screener and return announcements with date STRICTLY in [start, end].
+
+    Returns the same dict shape as the NSE / BSE fetchers in services/bse_announcements.py
+    so the downstream classifier and gate are exchange-agnostic.
+    """
     s = _coerce_date(start)
     e = _coerce_date(end)
     base_url = f"{SCREENER_BASE}/company/{ticker}/"
@@ -134,8 +196,8 @@ def fetch_announcements_in_range(
     if not html:
         return []
 
-    items = _parse_announcements(html, base_url)
-    in_range = [item for item in items if item.get("date") and s <= item["date"] <= e]
+    items = _parse_announcements(html, base_url, s, e)
+    in_range = [item for item in items if item.get("date") and s <= item["date"] <= e and item.get("title")]
     logger.info(
         "screener: %s (%s) — %s parsed, %s in [%s..%s]",
         company_name, ticker, len(items), len(in_range), s.isoformat(), e.isoformat(),

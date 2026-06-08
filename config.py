@@ -65,6 +65,11 @@ SCREENER_TICKERS: Dict[str, str] = {
 # Empty string => the competitor has no separately-listed BSE entity (the housing
 # subsidiary is wholly owned by an unlisted/listed parent). The BSE pipeline
 # skips empty scrips and the newsletter falls back to news/RSS coverage.
+#
+# NOTE (Jun 2026): BSE's announcement endpoints are blocked / returning empty for
+# external HTTP clients. The active data source is now NSE — see NSE_SYMBOLS below.
+# BSE_SECURITY_CODES is preserved for the audit trail and as a fallback in case NSE
+# access is interrupted; the actual pipeline reads NSE_SYMBOLS via get_nse_symbols().
 BSE_SECURITY_CODES: Dict[str, str] = {
     "HDFC Ltd":                     "500180",   # tracks HDFC Bank post-2023 merger
     "LIC Housing Finance":          "500253",
@@ -79,6 +84,29 @@ BSE_SECURITY_CODES: Dict[str, str] = {
     "L&T Finance Housing":          "",         # subsidiary unlisted; parent L&T Finance (533519) excluded
     "Aditya Birla Housing Finance": "",         # subsidiary unlisted; parent Aditya Birla Capital (540691) excluded
     "Cholamandalam Investment":     "511243",
+}
+
+
+# NSE ticker symbols. These power the corp-announcements pull at
+# https://www.nseindia.com/api/corporate-announcements (the active source as of Jun 2026,
+# since BSE has blocked / silently empties the equivalent endpoint).
+# Same subsidiary-vs-parent rules as BSE_SECURITY_CODES: empty string means the housing-
+# finance subsidiary is unlisted, so its parent is deliberately NOT tracked here to avoid
+# attributing parent-level filings (NCDs, board changes, etc.) to the subsidiary.
+NSE_SYMBOLS: Dict[str, str] = {
+    "HDFC Ltd":                     "HDFCBANK",     # merged into HDFC Bank in 2023
+    "LIC Housing Finance":          "LICHSGFIN",
+    "Indiabulls Housing Finance":   "SAMMAANCAP",   # renamed Sammaan Capital in 2024
+    "Can Fin Homes":                "CANFINHOME",
+    "Aavas Financiers":             "AAVAS",
+    "Home First Finance":           "HOMEFIRST",
+    "Repco Home Finance":           "REPCOHOME",
+    "Tata Capital Housing Finance": "",            # subsidiary unlisted; parent Tata Capital excluded
+    "Bajaj Finserv Home Loans":     "BAJAJHFL",    # = Bajaj Housing Finance (listed separately)
+    "Shriram Housing Finance":      "",            # sold to Warburg Pincus / Truhome Finance
+    "L&T Finance Housing":          "",            # subsidiary unlisted; parent L&T Finance excluded
+    "Aditya Birla Housing Finance": "",            # subsidiary unlisted; parent Aditya Birla Capital excluded
+    "Cholamandalam Investment":     "CHOLAFIN",
 }
 
 
@@ -169,3 +197,8 @@ def get_screener_tickers() -> Dict[str, str]:
 def get_bse_security_codes() -> Dict[str, str]:
     """Return the competitor-name -> BSE security code (scrip number) map (a copy)."""
     return dict(BSE_SECURITY_CODES)
+
+
+def get_nse_symbols() -> Dict[str, str]:
+    """Return the competitor-name -> NSE ticker symbol map (a copy)."""
+    return dict(NSE_SYMBOLS)
