@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Tuple
 from urllib.parse import urlparse
 
-from config import get_bse_security_codes, get_competitors, get_settings
+from config import get_bse_security_codes, get_competitors, get_nse_symbols, get_screener_tickers, get_settings
 from models.schemas import (
     WeeklyCompanySection,
     parse_weekly_bundle,
@@ -39,6 +39,7 @@ from services.scoring import (
 )
 from services.source_feeds import fetch_rss_articles
 from services.source_feeds import fetch_policy_and_rating_articles
+from services.source_feeds import fetch_google_news_articles
 from services.section_validators import (
     ALLOWED_COMPETITOR_SIGNAL_TYPES,
     ValidationResult,
@@ -146,10 +147,19 @@ logger = logging.getLogger(__name__)
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate weekly digest for configured competitors")
-    parser.add_argument("--week-start", required=True, help="Start date YYYY-MM-DD")
-    parser.add_argument("--week-end", required=True, help="End date YYYY-MM-DD")
+    parser.add_argument("--week-start", required=True, help="Start date YYYY-MM-DD (display window — appears in PDF header)")
+    parser.add_argument("--week-end", required=True, help="End date YYYY-MM-DD (display window — appears in PDF header)")
     parser.add_argument("--out", required=True)
     parser.add_argument("--export-json")
+    parser.add_argument(
+        "--lookback-days",
+        type=int,
+        default=15,
+        help=("How many days BEFORE --week-start to ALSO ingest from. Catches items that "
+              "filed late and would otherwise have slipped between two fortnightly runs. "
+              "The PDF header still shows --week-start to --week-end. Default 15. "
+              "Pass 0 to ingest exactly the display window."),
+    )
     parser.add_argument(
         "--render-only",
         action="store_true",
@@ -158,6 +168,21 @@ def parse_args() -> argparse.Namespace:
               "and re-render the PDF only. Useful when iterating on the renderer or styles."),
     )
     return parser.parse_args()
+
+
+def _compute_ingest_window(display_start: str, display_end: str, lookback_days: int) -> Tuple[str, str]:
+    """Return (ingest_start, ingest_end) for the given display window.
+
+    ingest_start is display_start shifted back by lookback_days; ingest_end equals
+    display_end. Pass lookback_days=0 to ingest exactly the display window.
+    """
+    if lookback_days <= 0:
+        return display_start, display_end
+    try:
+        d_start = date.fromisoformat(display_start)
+    except (ValueError, TypeError):
+        return display_start, display_end
+    return (d_start - timedelta(days=lookback_days)).isoformat(), display_end
 
 
 def _render_only_from_cache(week_start: str, week_end: str, out: str) -> None:
@@ -650,7 +675,17 @@ def _run_weekly_digest_agentic_analysis(
     end: str,
     out: str,
     export_json: str | None,
+    ingest_start: str | None = None,
+    ingest_end: str | None = None,
 ) -> None:
+    # `start` / `end` are the DISPLAY window (PDF header, cache URLs, filename).
+    # `ingest_start` / `ingest_end` are the wider window used for the in-function
+    # industry-keyword news fetch + BSE pull + LLM-prompt windows. When the caller
+    # doesn't pass them, fall back to the display window (no lookback).
+    if ingest_start is None:
+        ingest_start = start
+    if ingest_end is None:
+        ingest_end = end
     llm = _build_llm_client(settings)
     news_client = NewsAPIClient(api_key=settings.news_api_key)
     allowed_competitors = list(article_map.keys())
@@ -753,8 +788,8 @@ def _run_weekly_digest_agentic_analysis(
     industry_articles = news_client.fetch_company_articles(
         company="Indian Housing Finance Industry",
         aliases=industry_keywords,
-        from_date=_clamp_newsapi_from(start),
-        to_date=end,
+        from_date=_clamp_newsapi_from(ingest_start),
+        to_date=ingest_end,
         max_articles=25,
     )
     # Drop articles that are clearly non-Indian (foreign markets / foreign issuers
@@ -927,7 +962,7 @@ def _run_weekly_digest_agentic_analysis(
             regulatory_evidence_threshold,
         )
 
-    industry_prompt = weekly_digest_agentic_industry_prompt(start, end, evidence_block)
+    industry_prompt = weekly_digest_agentic_industry_prompt(ingest_start, ingest_end, evidence_block)
     industry_raw = _run_validated_section_prompt(
         llm=llm,
         store=store,
@@ -940,7 +975,7 @@ def _run_weekly_digest_agentic_analysis(
         validator=validate_industry_section,
     )
 
-    regulatory_prompt = weekly_digest_agentic_regulatory_prompt(start, end, regulatory_source_block)
+    regulatory_prompt = weekly_digest_agentic_regulatory_prompt(ingest_start, ingest_end, regulatory_source_block)
     regulatory_raw = _run_validated_section_prompt(
         llm=llm,
         store=store,
@@ -953,7 +988,7 @@ def _run_weekly_digest_agentic_analysis(
         validator=validate_regulatory_section,
     )
 
-    competitor_prompt = weekly_digest_agentic_competitor_prompt(start, end, allowed_competitors, evidence_block)
+    competitor_prompt = weekly_digest_agentic_competitor_prompt(ingest_start, ingest_end, allowed_competitors, evidence_block)
     competitor_raw = _run_validated_section_prompt(
         llm=llm,
         store=store,
@@ -970,8 +1005,8 @@ def _run_weekly_digest_agentic_analysis(
     )
 
     final_prompt = weekly_digest_agentic_final_synthesis_prompt(
-        week_start=start,
-        week_end=end,
+        week_start=ingest_start,
+        week_end=ingest_end,
         competitor_list=allowed_competitors,
         industry_json=json.dumps(industry_raw, ensure_ascii=False),
         regulatory_json=json.dumps(regulatory_raw, ensure_ascii=False),
@@ -994,7 +1029,10 @@ def _run_weekly_digest_agentic_analysis(
     )
 
     title = str(raw.get("title", f"Bi-Weekly Housing Finance Industry Agentic Analysis ({start} to {end})"))
-    time_period = str(raw.get("time_period", f"{start} to {end}"))
+    # Always force time_period to the DISPLAY window. The agentic LLM is given the wider
+    # ingest window in its prompt (so it doesn't filter out lookback-prefix evidence), but
+    # the report header / markdown / cover should read as the fortnight the user asked for.
+    time_period = f"{start} to {end}"
     industry_summary = [str(x) for x in raw.get("industry_summary", []) if str(x).strip()]
     if not industry_summary:
         fallback_lines = []
@@ -1134,9 +1172,11 @@ def _run_weekly_digest_agentic_analysis(
             llm=llm,
             competitors=allowed_competitors,
             bse_codes=get_bse_security_codes(),
-            start=start,
-            end=end,
-            store=store,  # writes every BSE filing + classification + enrichment + disposition
+            nse_symbols=get_nse_symbols(),          # NSE is the active source; BSE is fallback
+            screener_tickers=get_screener_tickers(),  # Screener supplements with BSE-mirrored PDFs
+            start=ingest_start,
+            end=ingest_end,
+            store=store,  # writes every filing + classification + enrichment + disposition
         )
         if bse_rows:
             logger.info(
@@ -1253,26 +1293,45 @@ def _run_weekly_digest_agentic_analysis(
     _save_json(agentic_json, payload)
     logger.info("Weekly digest agentic analysis generated: %s (markdown: %s)", agentic_pdf, agentic_md)
 
-def run_weekly_digest(week_start: str, week_end: str, out: str, export_json: str | None) -> None:
+def run_weekly_digest(week_start: str, week_end: str, out: str, export_json: str | None,
+                      lookback_days: int = 15) -> None:
     settings = get_settings()
+    # `start` and `end` are the DISPLAY window — what the PDF header, cover page,
+    # filename, and cache URLs all reference. `ingest_start` and `ingest_end` define
+    # the wider window used for the actual data-fetching calls (NewsAPI, RSS, BSE,
+    # policy/rating feeds) and the LLM prompt windows. By default we shift ingest_start
+    # back by 15 days so a fortnightly run catches items that filed late from the
+    # previous fortnight without changing what the PDF presents.
     start, end = _parse_week_range(week_start, week_end)
+    ingest_start, ingest_end = _compute_ingest_window(start, end, lookback_days)
+    if (ingest_start, ingest_end) != (start, end):
+        logger.info(
+            "Lookback active: ingesting from %s (display window: %s to %s). "
+            "Items filed in the lookback prefix are included; PDF still shows %s to %s.",
+            ingest_start, start, end, start, end,
+        )
     store = ArticleStore(settings.sqlite_db_path)
 
     competitors = get_competitors()
     news_client = NewsAPIClient(api_key=settings.news_api_key)
     llm = _build_llm_client(settings)
-    policy_rating_articles = fetch_policy_and_rating_articles(week_start=start, week_end=end)
+    policy_rating_articles = fetch_policy_and_rating_articles(week_start=ingest_start, week_end=ingest_end)
     store.upsert_articles(policy_rating_articles)
 
-    article_map = collect_articles_for_competitors(news_client, competitor_map=competitors, from_date=_clamp_newsapi_from(start), to_date=end, per_company_limit=12)
+    article_map = collect_articles_for_competitors(news_client, competitor_map=competitors, from_date=_clamp_newsapi_from(ingest_start), to_date=ingest_end, per_company_limit=12)
     company_sections: List[WeeklyCompanySection] = []
     curated_evidence_by_company: Dict[str, dict] = {}
 
     for company, items in article_map.items():
         aliases = competitors.get(company, [company])
         context_articles = _filter_context_for_company(policy_rating_articles, company=company, aliases=aliases)
-        supplemental = fetch_rss_articles(company=company, aliases=aliases, week_start=start, week_end=end)
-        merged = _merge_articles(_merge_articles(items, supplemental), context_articles)
+        supplemental = fetch_rss_articles(company=company, aliases=aliases, week_start=ingest_start, week_end=ingest_end)
+        # Per-company Google News RSS — broadens coverage especially for the housing-finance
+        # subsidiaries that have no separately-listed BSE/NSE entity (Aditya Birla HFC,
+        # L&T Finance Housing, Tata Capital Housing Finance, Shriram Housing Finance).
+        # Items are date- and relevance-filtered inside the helper.
+        google_news = fetch_google_news_articles(company=company, aliases=aliases, week_start=ingest_start, week_end=ingest_end)
+        merged = _merge_articles(_merge_articles(_merge_articles(items, supplemental), google_news), context_articles)
         store.upsert_articles(merged)
         annotate_base_scores(merged, company=company, aliases=aliases)
         for article in merged:
@@ -1375,7 +1434,7 @@ def run_weekly_digest(week_start: str, week_end: str, out: str, export_json: str
             logger.info("%s | checked=%s deduped=%s selected=0 signals=0 (coverage gap)", company, checked_count, len(deduped_articles))
             continue
 
-        company_prompt = weekly_company_intelligence_prompt(company=company, week_start=start, week_end=end, articles_block=prompt_block)
+        company_prompt = weekly_company_intelligence_prompt(company=company, week_start=ingest_start, week_end=ingest_end, articles_block=prompt_block)
         try:
             company_raw = llm.run_json_prompt(company_prompt)
         except RuntimeError as exc:
@@ -1385,8 +1444,8 @@ def run_weekly_digest(week_start: str, week_end: str, out: str, export_json: str
             condensed_block = articles_to_prompt_block(selected_for_llm[:4], limit=4)
             condensed_prompt = weekly_company_intelligence_prompt(
                 company=company,
-                week_start=start,
-                week_end=end,
+                week_start=ingest_start,
+                week_end=ingest_end,
                 articles_block=condensed_block,
             )
             company_raw = llm.run_json_prompt(condensed_prompt, retries=1)
@@ -1446,6 +1505,8 @@ def run_weekly_digest(week_start: str, week_end: str, out: str, export_json: str
         fallback_company_sections=company_sections,
         start=start,
         end=end,
+        ingest_start=ingest_start,
+        ingest_end=ingest_end,
         out=out,
         export_json=export_json,
     )
@@ -1456,7 +1517,7 @@ def main() -> None:
     if getattr(args, "render_only", False):
         _render_only_from_cache(week_start=args.week_start, week_end=args.week_end, out=args.out)
         return
-    run_weekly_digest(week_start=args.week_start, week_end=args.week_end, out=args.out, export_json=args.export_json)
+    run_weekly_digest(week_start=args.week_start, week_end=args.week_end, out=args.out, export_json=args.export_json, lookback_days=int(args.lookback_days))
 
 
 if __name__ == "__main__":
