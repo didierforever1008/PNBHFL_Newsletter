@@ -398,12 +398,16 @@ E) "Other" — anything routine: q-results without commentary, dividend declarat
 
 Rules:
 - Set "relevant" = true ONLY when category is one of the 11 above (NOT "Other").
-- MATERIALITY CAP: Across ALL items for this company, mark AT MOST 2 items as
-  relevant=true — the two most material to a senior HFC executive reviewing
-  competitor activity for the period. Mark every other item "Other" (relevant=false),
-  EVEN IF it would technically fit one of the categories above. Prefer concrete events
-  (e.g., management change, capital raise, NPA disclosure, rumour clarification) over
-  routine intimations.
+- MATERIALITY CAP — operational-aware:
+  * For "Hiring" and "Management Change": NO cap. Every named-individual change is
+    material competitor intelligence. Mark ALL such items relevant=true.
+  * For "Rumour": NO cap. SEBI Reg-30 clarifications on news rarely come more than
+    once or twice per fortnight; surface all of them.
+  * For Funding / Capital / Liquidity / Risk / Governance / AssetQuality / Growth /
+    Strategy: mark AT MOST 2 items as relevant=true — the two most material to a
+    senior HFC executive. Mark every other item "Other" (relevant=false), EVEN IF
+    it would technically fit one of the categories above. Prefer concrete events
+    (capital raise, NPA disclosure, rating action) over routine intimations.
 - "summary" formatting:
   * ONE concise factual sentence, max ~25 words.
   * MUST start with a capital letter and end with a single period (never "..", "...",
@@ -1473,8 +1477,20 @@ def collect_bse_signals(
             # Non-operational items (Funding / Risk / Growth / Rumour) pass through.
             gated.append(r)
 
-        # Brevity cap: at most 2 line items per competitor in the newsletter.
-        gated = gated[:2]
+        # Brevity cap — operational-aware:
+        #   * Operational Signals (Hiring / Management Change / Rumour) — NO cap.
+        #     Every named-individual change is high-signal boardroom intelligence;
+        #     a 4-person board reshuffle is materially distinct from a single change.
+        #   * Non-operational (Funding / Capital / Liquidity / Risk / Governance /
+        #     AssetQuality / Growth / Strategy) — keep up to 2 most material per
+        #     company so the newsletter doesn't drown in routine NCD allotments.
+        # The classifier prompt itself already enforces a similar split, but this is
+        # the structural belt-and-suspenders in case the LLM marks more than 2
+        # non-operational items relevant=true.
+        operational_cats = {"Hiring", "Management Change", "Rumour"}
+        op_items = [r for r in gated if r.get("category") in operational_cats]
+        non_op_items = [r for r in gated if r.get("category") not in operational_cats]
+        gated = op_items + non_op_items[:2]
 
         for r in gated:
             cat = r["category"]
